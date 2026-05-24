@@ -103,6 +103,35 @@ watchlist:
       name: "Tata Steel"
     - symbol: "ULTRACEMCO.NS"
       name: "UltraTech Cement"
+    # ── Telecom ──────────────────────────────────────────────────────────
+    - symbol: "BHARTIARTL.NS"
+      name: "Bharti Airtel"
+    # ── Healthcare (Hospitals) ───────────────────────────────────────────
+    - symbol: "APOLLOHOSP.NS"
+      name: "Apollo Hospitals"
+    - symbol: "MAXHEALTH.NS"
+      name: "Max Healthcare Institute"
+    # ── Real Estate ──────────────────────────────────────────────────────
+    - symbol: "DLF.NS"
+      name: "DLF Limited"
+    # ── Specialty Chemicals ──────────────────────────────────────────────
+    - symbol: "PIDILITIND.NS"
+      name: "Pidilite Industries"
+    # ── FMCG (additional) ────────────────────────────────────────────────
+    - symbol: "BRITANNIA.NS"
+      name: "Britannia Industries"
+    - symbol: "DABUR.NS"
+      name: "Dabur India"
+    # ── Defence ──────────────────────────────────────────────────────────
+    - symbol: "HAL.NS"
+      name: "Hindustan Aeronautics"
+    - symbol: "BEL.NS"
+      name: "Bharat Electronics"
+    # ── New-age / Consumer Tech ───────────────────────────────────────────
+    - symbol: "ZOMATO.NS"
+      name: "Zomato"
+    - symbol: "NYKAA.NS"
+      name: "Nykaa (FSN E-Commerce)"
 
   # Mutual fund scheme codes from AMFI/mfapi.in
   # Find codes: https://api.mfapi.in/mf/search?q=FUND_NAME

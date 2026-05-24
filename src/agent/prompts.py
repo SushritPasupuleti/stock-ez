@@ -44,6 +44,9 @@ ANALYSIS_PROMPT = """\
 ### Watchlist — Mutual Funds
 {funds_data}
 
+### Your Portfolio (user's current holdings)
+{portfolio_data}
+
 ---
 
 ## Your Analysis
@@ -82,6 +85,17 @@ one-line reason each.
 
 ### 5. Top 3 Market Risks
 Concise risks investors should watch over the next 4 weeks.
+
+### 6. Portfolio Review
+For each held position where current price data is available (not marked N/A), \
+give a brief review:
+
+**[SYMBOL / Fund Name]**  (avg cost ₹X · now ₹Y · P&L: Z%)
+- Stance: HOLD / ADD / TRIM / EXIT
+- Reason: [1–2 sentences referencing current market data, news, or fundamentals]
+
+If a position is listed as N/A (no live price available), skip it entirely. \
+If the portfolio is empty, omit this section and do not invent any positions.
 
 ### Disclaimer
 [Include the standard disclaimer from your system instructions.]

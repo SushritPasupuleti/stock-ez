@@ -21,6 +21,7 @@ from src.config.settings import FundEntry, Settings, StockEntry
 from src.data_sources.funds import FundData, FundFetcher
 from src.data_sources.news import NewsArticle, NewsFetcher
 from src.data_sources.news_cache import NewsCache
+from src.data_sources.portfolio import EnrichedPosition, Position, PortfolioStore
 from src.data_sources.stocks import StockData, StockFetcher
 from src.utils.pdf_export import build_pdf
 
@@ -215,6 +216,8 @@ _DEFAULTS: dict[str, object] = {
     # pdf report from last run
     "report_pdf_bytes": None,
     "report_pdf_name": None,
+    # portfolio enrichment from last run
+    "portfolio_enriched": [],
 }
 for _k, _v in _DEFAULTS.items():
     if _k not in st.session_state:
@@ -611,6 +614,12 @@ if st.session_state.run_requested:
     st.session_state.news = _news
     st.session_state.indices = _indices
 
+    # ── Portfolio enrichment ───────────────────────────────────────────────
+    _port_store = PortfolioStore()
+    _portfolio_enriched = _port_store.enrich(_stocks, _funds)
+    _portfolio_text = _port_store.format_for_prompt(_portfolio_enriched)
+    st.session_state.portfolio_enriched = _portfolio_enriched
+
     # ── LLM streaming ──────────────────────────────────────────────────────
     st.subheader("🤖 AI Analysis")
     st.caption(f"Model: `{settings.llm.model}` · streaming…")
@@ -623,6 +632,7 @@ if st.session_state.run_requested:
         news_data=_news_fetcher.format_for_prompt(_news),
         stocks_data=_stock_fetcher.format_for_prompt(_stocks),
         funds_data=_fund_fetcher.format_for_prompt(_funds),
+        portfolio_data=_portfolio_text,
     )
 
     with st.container(border=True):
@@ -684,8 +694,8 @@ if st.session_state.run_requested:
 # ─────────────────────────────────────────────────────────────────────────────
 # Tabs
 # ─────────────────────────────────────────────────────────────────────────────
-tab_overview, tab_stocks, tab_funds, tab_news, tab_raw, tab_reports = st.tabs(
-    ["📊 Overview", "📈 Stocks", "💼 Funds", "📰 News", "🗂️ Raw Data", "🗃️ Reports"]
+tab_overview, tab_stocks, tab_funds, tab_portfolio, tab_news, tab_raw, tab_reports = st.tabs(
+    ["📊 Overview", "📈 Stocks", "💼 Funds", "💰 Portfolio", "📰 News", "🗂️ Raw Data", "🗃️ Reports"]
 )
 
 _has_data: bool = st.session_state.analysis is not None
@@ -887,6 +897,206 @@ with tab_funds:
         if _frec_key:
             st.subheader("🤖 AI Fund Recommendations")
             st.markdown(_sections[_frec_key])
+
+# ── Portfolio ──────────────────────────────────────────────────────────────────
+with tab_portfolio:
+    _port_store = PortfolioStore()
+
+    st.subheader("💰 My Portfolio")
+    st.caption(
+        "Track your holdings · edits persist to `data/portfolio.db` · "
+        "positions are enriched with live prices on every analysis run"
+    )
+
+    # ── Enriched P&L view (visible after a run) ───────────────────────────
+    _ep_list: list[EnrichedPosition] = st.session_state.get("portfolio_enriched", [])
+    if _has_data and _ep_list:
+        _total_cost = sum(ep.cost_basis for ep in _ep_list)
+        _valued_eps = [ep for ep in _ep_list if ep.current_value is not None]
+        _total_current = sum(ep.current_value for ep in _valued_eps)  # type: ignore[misc]
+
+        _pmc1, _pmc2, _pmc3 = st.columns(3)
+        _pmc1.metric("Total Invested", f"₹{_total_cost:,.0f}")
+        if _valued_eps and _total_cost > 0:
+            _total_pnl = _total_current - _total_cost
+            _total_pnl_pct = _total_pnl / _total_cost * 100
+            _pmc2.metric("Current Value", f"₹{_total_current:,.0f}")
+            _pmc3.metric(
+                "Unrealised P&L",
+                f"₹{_total_pnl:+,.0f}",
+                f"{_total_pnl_pct:+.2f}%",
+            )
+        else:
+            _pmc2.metric("Current Value", "N/A")
+            _pmc3.metric("Unrealised P&L", "N/A")
+
+        st.divider()
+
+        # Enriched positions table
+        _ep_rows = []
+        for _ep in _ep_list:
+            _p = _ep.position
+            _ep_rows.append(
+                {
+                    "Symbol/Code": _p.symbol,
+                    "Name": _p.name,
+                    "Type": _p.asset_type,
+                    "Qty": _p.quantity,
+                    "Buy Price (₹)": _p.buy_price,
+                    "Cost Basis (₹)": _ep.cost_basis,
+                    "Current (₹)": _ep.current_price,
+                    "Current Value (₹)": _ep.current_value,
+                    "P&L (₹)": _ep.pnl_abs,
+                    "P&L %": _ep.pnl_pct,
+                    "Buy Date": _p.buy_date or "–",
+                    "Notes": _p.notes or "–",
+                }
+            )
+        _ep_df = pd.DataFrame(_ep_rows)
+        _ep_num_cols = {
+            "Buy Price (₹)": _fmt_inr,
+            "Cost Basis (₹)": _fmt_inr,
+            "Current (₹)": _fmt_inr,
+            "Current Value (₹)": _fmt_inr,
+            "P&L (₹)": lambda x: f"₹{float(x):+,.0f}",
+            "P&L %": lambda x: f"{float(x):+.2f}%",
+            "Qty": "{:.4f}",
+        }
+        st.dataframe(
+            _ep_df.style.map(_style_pct, subset=["P&L %"]).format(
+                _ep_num_cols, na_rep="N/A"
+            ),
+            use_container_width=True,
+            hide_index=True,
+        )
+
+        # AI portfolio review section (generated by LLM)
+        _port_rec_key = next(
+            (k for k in st.session_state.sections if "Portfolio" in k), None
+        )
+        if _port_rec_key:
+            st.divider()
+            st.subheader("🤖 AI Portfolio Review")
+            st.markdown(st.session_state.sections[_port_rec_key])
+
+        st.divider()
+
+    # ── Editor (always visible) ───────────────────────────────────────────
+    st.subheader("✏️ Edit Positions")
+    st.caption(
+        "Use the exact symbol from the watchlist (e.g. `HDFCBANK.NS`) for stocks, "
+        "or the AMFI scheme code (e.g. `119551`) for funds.  "
+        "Positions not in the watchlist will show **N/A** for live price — "
+        "the AI will skip them in the portfolio review."
+    )
+
+    _positions_all = _port_store.list_all()
+    _port_edit_data = [
+        {
+            "id": p.id,
+            "Symbol/Code": p.symbol,
+            "Name": p.name,
+            "Type": p.asset_type,
+            "Quantity": p.quantity,
+            "Buy Price (₹)": p.buy_price,
+            "Buy Date": p.buy_date or "",
+            "Notes": p.notes or "",
+        }
+        for p in _positions_all
+    ]
+    _port_edit_df = pd.DataFrame(
+        _port_edit_data,
+        columns=["id", "Symbol/Code", "Name", "Type", "Quantity", "Buy Price (₹)", "Buy Date", "Notes"],
+    )
+    _edited_port = st.data_editor(
+        _port_edit_df,
+        num_rows="dynamic",
+        use_container_width=True,
+        hide_index=True,
+        key="portfolio_editor",
+        column_config={
+            "id": None,  # hidden — preserves row identity through edits
+            "Symbol/Code": st.column_config.TextColumn(
+                "Symbol / Scheme Code",
+                help="Stock: `HDFCBANK.NS`   Fund: `119551`",
+            ),
+            "Name": st.column_config.TextColumn("Name"),
+            "Type": st.column_config.SelectboxColumn(
+                "Type", options=["stock", "fund"], required=True
+            ),
+            "Quantity": st.column_config.NumberColumn(
+                "Quantity", min_value=0.0001, format="%.4f", step=1.0,
+                help="Shares for stocks; units for mutual funds",
+            ),
+            "Buy Price (₹)": st.column_config.NumberColumn(
+                "Avg Buy Price (₹)", min_value=0.0, format="%.2f", step=0.01,
+                help="Average price per share / unit at time of purchase",
+            ),
+            "Buy Date": st.column_config.TextColumn(
+                "Buy Date", help="Optional — format YYYY-MM-DD"
+            ),
+            "Notes": st.column_config.TextColumn("Notes"),
+        },
+    )
+
+    if st.button(
+        "💾 Save Portfolio", type="secondary", use_container_width=True
+    ):
+        _new_positions: list[Position] = []
+        for _, _row in _edited_port.iterrows():
+            _sym = str(_row.get("Symbol/Code", "")).strip()
+            if not _sym:
+                continue
+            # Recover the original id (hidden column, NaN for new rows)
+            _pid_raw = _row.get("id")
+            _pid: int | None = (
+                int(_pid_raw)
+                if _pid_raw is not None
+                and not (isinstance(_pid_raw, float) and pd.isna(_pid_raw))
+                else None
+            )
+            _qty = float(_row.get("Quantity") or 0)
+            _bp = float(_row.get("Buy Price (₹)") or 0)
+            if _qty <= 0 or _bp < 0:
+                continue
+            # buy_date — accepts strings, date objects, or NaN/None
+            _bd_raw = _row.get("Buy Date")
+            _bd: str | None = None
+            if _bd_raw is not None and not (
+                isinstance(_bd_raw, float) and pd.isna(_bd_raw)
+            ):
+                _bd_str = str(_bd_raw).strip()
+                if _bd_str and _bd_str not in ("NaT", "None", "nan"):
+                    _bd = _bd_str
+            _notes_raw = _row.get("Notes")
+            _notes: str | None = (
+                str(_notes_raw).strip()
+                if _notes_raw is not None
+                and not (isinstance(_notes_raw, float) and pd.isna(_notes_raw))
+                and str(_notes_raw).strip()
+                else None
+            )
+            _new_positions.append(
+                Position(
+                    id=_pid,
+                    symbol=_sym,
+                    name=str(_row.get("Name", "")).strip() or _sym,
+                    asset_type=str(_row.get("Type", "stock")).strip(),
+                    quantity=_qty,
+                    buy_price=_bp,
+                    buy_date=_bd,
+                    notes=_notes,
+                )
+            )
+        _port_store.upsert_bulk(_new_positions)
+        st.success(f"✓ Saved {len(_new_positions)} position(s)")
+        st.rerun()
+
+    if not _has_data and _positions_all:
+        st.info(
+            "▶ Run an analysis from the sidebar to enrich these positions "
+            "with live prices and see your unrealised P&L."
+        )
 
 # ── News ───────────────────────────────────────────────────────────────────────
 with tab_news:
