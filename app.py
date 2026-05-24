@@ -21,7 +21,7 @@ from src.config.settings import FundEntry, Settings, StockEntry
 from src.data_sources.funds import FundData, FundFetcher
 from src.data_sources.news import NewsArticle, NewsFetcher
 from src.data_sources.news_cache import NewsCache
-from src.data_sources.portfolio import EnrichedPosition, Position, PortfolioStore
+from src.data_sources.portfolio import EnrichedPosition, MetalSignal, Position, PortfolioStore
 from src.data_sources.stocks import StockData, StockFetcher
 from src.utils.pdf_export import build_pdf
 
@@ -230,6 +230,12 @@ for _k, _v in _DEFAULTS.items():
 @st.cache_resource
 def _load_settings() -> Settings:
     return Settings.load("config.yaml")
+
+
+@st.cache_data(ttl=3600)
+def _load_metal_signals() -> tuple[MetalSignal, MetalSignal, float | None]:
+    """Fetch gold/silver market signals; cached for 1 hour."""
+    return PortfolioStore.fetch_metal_signals()
 
 
 _base = _load_settings()
@@ -908,6 +914,48 @@ with tab_portfolio:
         "positions are enriched with live prices on every analysis run"
     )
 
+    # ── Precious metals market pulse (always visible) ─────────────────────
+    _SIGNAL_ICON  = {"BUY": "🟢", "SELL": "🔴", "HOLD": "🟡", "N/A": "⚪"}
+    _SIGNAL_COLOR = {"BUY": st.success, "SELL": st.error, "HOLD": st.warning, "N/A": st.info}
+
+    with st.expander("📊 Gold & Silver Market Pulse", expanded=True):
+        with st.spinner("Fetching COMEX spot data…"):
+            _gold_sig, _silver_sig, _gs_ratio = _load_metal_signals()
+
+        _pm_col1, _pm_col2 = st.columns(2)
+        for _ms, _col in zip([_gold_sig, _silver_sig], [_pm_col1, _pm_col2]):
+            with _col:
+                _icon  = _SIGNAL_ICON.get(_ms.signal, "⚪")
+                _cfn   = _SIGNAL_COLOR.get(_ms.signal, st.info)
+                st.markdown(f"#### {_icon} {_ms.metal}")
+                if _ms.price_inr is not None:
+                    _delta_lbl = (
+                        f"{_ms.change_52w_pct:+.1f}% (52w)"
+                        if _ms.change_52w_pct is not None else None
+                    )
+                    st.metric("Spot price", f"₹{_ms.price_inr:,.2f} /gram", _delta_lbl)
+                _cfn(f"**{_ms.signal}**")
+                for _reason in _ms.reasons:
+                    st.caption(f"• {_reason}")
+
+        if _gs_ratio is not None:
+            st.divider()
+            if _gs_ratio > 85:
+                st.info(
+                    f"**Gold/Silver Ratio: {_gs_ratio}** — Historically elevated. "
+                    "Silver is relatively cheap vs gold; may favour adding silver."
+                )
+            elif _gs_ratio < 65:
+                st.info(
+                    f"**Gold/Silver Ratio: {_gs_ratio}** — Historically low. "
+                    "Gold is relatively cheap vs silver; may favour adding gold."
+                )
+            else:
+                st.caption(
+                    f"Gold/Silver ratio: {_gs_ratio} "
+                    f"(historical range ~65–85; currently neutral)"
+                )
+
     # ── Enriched P&L view (visible after a run) ───────────────────────────
     _ep_list: list[EnrichedPosition] = st.session_state.get("portfolio_enriched", [])
     if _has_data and _ep_list:
@@ -984,10 +1032,10 @@ with tab_portfolio:
     # ── Editor (always visible) ───────────────────────────────────────────
     st.subheader("✏️ Edit Positions")
     st.caption(
-        "Use the exact symbol from the watchlist (e.g. `HDFCBANK.NS`) for stocks, "
-        "or the AMFI scheme code (e.g. `119551`) for funds.  "
-        "Positions not in the watchlist will show **N/A** for live price — "
-        "the AI will skip them in the portfolio review."
+        "**stock** / **etf**: use the exact NSE symbol (e.g. `HDFCBANK.NS`, `GOLDBEES.NS`)  ·  "
+        "**fund**: AMFI scheme code (e.g. `119551`)  ·  "
+        "**gold** / **silver**: enter quantity in **grams**, buy price in **₹/gram** — "
+        "live price is fetched from COMEX spot × USD/INR (no ETF proxy needed)"
     )
 
     _positions_all = _port_store.list_all()
@@ -1022,7 +1070,7 @@ with tab_portfolio:
             ),
             "Name": st.column_config.TextColumn("Name"),
             "Type": st.column_config.SelectboxColumn(
-                "Type", options=["stock", "fund"], required=True
+                "Type", options=["stock", "etf", "fund", "gold", "silver"], required=True
             ),
             "Quantity": st.column_config.NumberColumn(
                 "Quantity", min_value=0.0001, format="%.4f", step=1.0,

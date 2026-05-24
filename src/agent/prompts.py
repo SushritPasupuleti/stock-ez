@@ -94,6 +94,10 @@ give a brief review:
 - Stance: HOLD / ADD / TRIM / EXIT
 - Reason: [1–2 sentences referencing current market data, news, or fundamentals]
 
+For **ETF** positions, comment on the underlying index or sector outlook. \
+For **gold** and **silver** positions, reference macro factors (USD strength, \
+RBI policy, global risk sentiment) that typically drive precious metal prices \
+in India — do not recommend specific price targets. \
 If a position is listed as N/A (no live price available), skip it entirely. \
 If the portfolio is empty, omit this section and do not invent any positions.
 

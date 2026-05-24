@@ -132,6 +132,33 @@ watchlist:
       name: "Eternal (Zomato)"
     - symbol: "NYKAA.NS"
       name: "Nykaa (FSN E-Commerce)"
+    # ── ETFs ─────────────────────────────────────────────────────────────
+    # Index ETFs
+    - symbol: "NIFTYBEES.NS"
+      name: "Nippon Nifty 50 BeES ETF"
+    - symbol: "JUNIORBEES.NS"
+      name: "Nippon Nifty Next 50 BeES ETF"
+    - symbol: "BANKBEES.NS"
+      name: "Nippon Bank BeES ETF"
+    # Sector ETFs
+    - symbol: "ITETF.NS"
+      name: "Nippon Nifty IT ETF"
+    - symbol: "PSUBNKBEES.NS"
+      name: "Nippon PSU Bank BeES ETF"
+    - symbol: "PHARMABEES.NS"
+      name: "Nippon Pharma BeES ETF"
+    - symbol: "INFRABEES.NS"
+      name: "Nippon Infrastructure BeES ETF"
+    # Commodity ETFs (gold & silver)
+    # Note: physical gold/silver portfolio positions use COMEX spot pricing
+    # directly — these ETFs are tracked for their own investment merit.
+    - symbol: "GOLDBEES.NS"
+      name: "Nippon Gold BeES ETF"
+    - symbol: "SILVERBEES.NS"
+      name: "Nippon Silver BeES ETF"
+    # International / Thematic ETFs
+    - symbol: "MAFANG.NS"
+      name: "Mirae Asset NYSE FANG+ ETF"
 
   # Mutual fund scheme codes from AMFI/mfapi.in
   # Find codes: https://api.mfapi.in/mf/search?q=FUND_NAME
