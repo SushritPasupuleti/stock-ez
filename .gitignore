@@ -5,6 +5,7 @@ __pycache__/
 *.pyo
 *.egg-info/
 reports/
+data/
 
 # Logs
 logs

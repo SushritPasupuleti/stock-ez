@@ -20,7 +20,9 @@ from src.agent.prompts import ANALYSIS_PROMPT, SYSTEM_PROMPT
 from src.config.settings import FundEntry, Settings, StockEntry
 from src.data_sources.funds import FundData, FundFetcher
 from src.data_sources.news import NewsArticle, NewsFetcher
+from src.data_sources.news_cache import NewsCache
 from src.data_sources.stocks import StockData, StockFetcher
+from src.utils.pdf_export import build_pdf
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Page config
@@ -37,7 +39,9 @@ MODELS: list[str] = [
     "mistral-small3.2:24b",
     "deepseek-r1:14b",
     "phi4:14b",
+    "gemma3:27b",
     "gemma3:12b",
+    "qwen3.5:9b",
     "qwen3:8b",
 ]
 
@@ -158,6 +162,11 @@ _DEFAULTS: dict[str, object] = {
     "conn_status": None,   # None | "ok" | "no_model" | "no_conn"
     "conn_model": None,    # which model the last check was for
     "conn_url": None,      # which URL the last check was for
+    # config persistence
+    "save_config_requested": False,
+    # pdf report from last run
+    "report_pdf_bytes": None,
+    "report_pdf_name": None,
 }
 for _k, _v in _DEFAULTS.items():
     if _k not in st.session_state:
@@ -307,17 +316,63 @@ with st.sidebar:
             else:
                 st.caption("No results found.")
 
+    if st.button("💾 Save Config to config.yaml", use_container_width=True, type="secondary"):
+        st.session_state.save_config_requested = True
+
     st.divider()
 
-    # ── Run options ───────────────────────────────────────────────────────────
-    lookback = st.number_input(
-        "News lookback (hours)",
-        min_value=6,
-        max_value=72,
-        value=int(_base.news.lookback_hours),
-        step=6,
+    # ── News lookback ─────────────────────────────────────────────────────────
+    st.subheader("⏱️ News Lookback")
+    _LOOKBACK_PRESETS = {
+        "Last 24h": 24,
+        "Last 48h": 48,
+        "Last 3 Days": 72,
+        "Last Week": 168,
+        "Last 2 Weeks": 336,
+        "Last Month": 720,
+        "Custom": 0,
+    }
+    _preset_label = st.selectbox(
+        "Quick select",
+        list(_LOOKBACK_PRESETS.keys()),
+        index=0,
+        key="lookback_preset",
     )
+    _preset_hours = _LOOKBACK_PRESETS[_preset_label]
+    if _preset_hours == 0:
+        lookback = int(
+            st.number_input(
+                "Custom hours",
+                min_value=1,
+                max_value=8760,
+                value=max(1, int(_base.news.lookback_hours)),
+                step=1,
+            )
+        )
+    else:
+        lookback = _preset_hours
+        st.caption(f"{_preset_hours}h window · approx {_preset_hours // 24}d" if _preset_hours >= 24 else f"{_preset_hours}h window")
 
+    # ── News cache stats ──────────────────────────────────────────────────────
+    try:
+        _sidebar_cache = NewsCache()
+        _sc_stats = _sidebar_cache.stats()
+        _sc_total = _sc_stats["total_articles"]
+        if _sc_total > 0:
+            _sc_age = _sc_stats.get("oldest_age_hours")
+            _age_str = f" · oldest {_sc_age:.0f}h ago" if _sc_age else ""
+            st.caption(f"📦 News cache: {_sc_total} articles{_age_str}")
+            if st.button("🗑️ Clear news cache", use_container_width=True, key="clear_cache_btn"):
+                _sidebar_cache.clear()
+                st.success("Cache cleared")
+        else:
+            st.caption("📦 News cache: empty")
+    except Exception:
+        pass
+
+    st.divider()
+
+    # ── Run ───────────────────────────────────────────────────────────────────
     _run_btn = st.button(
         "▶ Run Analysis",
         type="primary",
@@ -356,6 +411,18 @@ def _build_settings() -> Settings:
         if pd.notna(row.get("Code")) and str(row["Code"]).strip()
     ]
     return s
+
+
+# Handle deferred save-config request (button was clicked in sidebar)
+if st.session_state.get("save_config_requested"):
+    st.session_state.save_config_requested = False
+    try:
+        _s_to_save = _build_settings()
+        _s_to_save.save("config.yaml")
+        _load_settings.clear()
+        st.sidebar.success("✓ Saved to config.yaml")
+    except Exception as _save_err:
+        st.sidebar.error(f"Save failed: {_save_err}")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -398,13 +465,17 @@ if st.session_state.run_requested:
     # ── Data fetching ──────────────────────────────────────────────────────
     with st.status("Gathering market data…", expanded=True) as _status:
         st.write("📰 Fetching news…")
+        _news_cache = NewsCache()
         _news_fetcher = NewsFetcher(
             sources=settings.news.sources,
             max_articles=settings.news.max_articles,
             lookback_hours=settings.news.lookback_hours,
+            cache=_news_cache,
+            cache_ttl_minutes=30,
         )
         _news = _news_fetcher.fetch_all()
-        st.write(f"✅ {len(_news)} articles")
+        _cache_total = _news_cache.stats()["total_articles"]
+        st.write(f"✅ {len(_news)} articles  ·  {_cache_total} cached")
 
         st.write("📊 Fetching market indices…")
         _stock_fetcher = StockFetcher(region_config=settings.region)
@@ -464,6 +535,29 @@ if st.session_state.run_requested:
         f"### News\n\n{_news_fetcher.format_for_prompt(_news)}\n",
         encoding="utf-8",
     )
+
+    # ── Save PDF report ────────────────────────────────────────────────────
+    _pdf_path = _report_dir / f"analysis_{_ts}.pdf"
+    try:
+        _pdf_bytes = build_pdf(
+            analysis=_full_response,
+            stocks_data=[vars(s) for s in _stocks],
+            funds_data=[vars(f) for f in _funds],
+            indices_data=[vars(i) for i in _indices],
+            news_articles=_news,
+            metadata={
+                "date": datetime.now().strftime("%d %b %Y %H:%M IST"),
+                "model": settings.llm.model,
+                "region": settings.region.name,
+            },
+        )
+        _pdf_path.write_bytes(_pdf_bytes)
+        st.session_state.report_pdf_bytes = _pdf_bytes
+        st.session_state.report_pdf_name = _pdf_path.name
+    except Exception as _pdf_err:
+        st.session_state.report_pdf_bytes = None
+        st.session_state.report_pdf_name = None
+        st.warning(f"PDF generation skipped: {_pdf_err}")
 
     # Persist analysis in session state
     st.session_state.analysis = _full_response
@@ -809,19 +903,41 @@ with tab_reports:
             )
 
         if _sel_report:
-            _rb1, _rb2, _rb3 = st.columns([1, 1, 5])
+            _rb1, _rb2, _rb3, _rb4 = st.columns([1, 1, 1, 3])
             with _rb1:
                 if st.button("🗑️ Delete", type="secondary", key="del_report"):
                     _sel_report.unlink()
+                    _pdf_sibling = _sel_report.with_suffix(".pdf")
+                    if _pdf_sibling.exists():
+                        _pdf_sibling.unlink()
                     st.rerun()
             with _rb2:
                 st.download_button(
-                    "⬇️ Download",
+                    "⬇️ Markdown",
                     data=_sel_report.read_text(encoding="utf-8"),
                     file_name=_sel_report.name,
                     mime="text/markdown",
                     key="dl_report",
                 )
+            with _rb3:
+                # Look for a PDF saved alongside this report
+                _pdf_sibling = _sel_report.with_suffix(".pdf")
+                if _pdf_sibling.exists():
+                    st.download_button(
+                        "📄 PDF",
+                        data=_pdf_sibling.read_bytes(),
+                        file_name=_pdf_sibling.name,
+                        mime="application/pdf",
+                        key="dl_report_pdf",
+                    )
+                elif st.session_state.get("report_pdf_bytes"):
+                    st.download_button(
+                        "📄 PDF",
+                        data=st.session_state.report_pdf_bytes,
+                        file_name=st.session_state.report_pdf_name or "analysis.pdf",
+                        mime="application/pdf",
+                        key="dl_report_pdf_session",
+                    )
 
             st.divider()
             st.markdown(_sel_report.read_text(encoding="utf-8"))

@@ -162,3 +162,52 @@ class Settings:
             news=news,
             output=output,
         )
+
+    def save(self, config_path: str | Path = "config.yaml") -> None:
+        """Write the current settings back to config.yaml, preserving all other fields."""
+        config_file = Path(config_path)
+        if not config_file.is_absolute():
+            candidates = [
+                Path.cwd() / config_path,
+                Path(__file__).parent.parent.parent / config_path,
+            ]
+            for c in candidates:
+                if c.exists():
+                    config_file = c
+                    break
+
+        # Load existing YAML to preserve fields we don't manage
+        if config_file.exists():
+            with open(config_file, "r", encoding="utf-8") as f:
+                data = yaml.safe_load(f) or {}
+        else:
+            data = {}
+
+        # Update only managed sections
+        data.setdefault("llm", {})
+        data["llm"]["model"] = self.llm.model
+        data["llm"]["base_url"] = self.llm.base_url
+        data["llm"]["temperature"] = self.llm.temperature
+        data["llm"]["num_ctx"] = self.llm.num_ctx
+
+        data.setdefault("region", {})
+        data["region"]["market"] = self.region.market
+        data["region"]["name"] = self.region.name
+
+        data["watchlist"] = {
+            "stocks": [
+                {"symbol": s.symbol, "name": s.name}
+                for s in self.watchlist.stocks
+            ],
+            "funds": [
+                {"scheme_code": f.scheme_code, "name": f.name}
+                for f in self.watchlist.funds
+            ],
+        }
+
+        data.setdefault("news", {})
+        data["news"]["lookback_hours"] = self.news.lookback_hours
+        data["news"]["max_articles"] = self.news.max_articles
+
+        with open(config_file, "w", encoding="utf-8") as f:
+            yaml.dump(data, f, allow_unicode=True, default_flow_style=False, sort_keys=False)

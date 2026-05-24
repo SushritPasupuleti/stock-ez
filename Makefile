@@ -47,6 +47,14 @@ pull-model:
 pull-model-fast:
 	ollama pull qwen3:8b
 
+## Pull Qwen3.5 9B (~6 GB)
+pull-model-qwen35:
+	ollama pull qwen3.5:9b
+
+## Pull Gemma 3 27B (~17 GB, near 16 GB VRAM limit)
+pull-model-gemma27b:
+	ollama pull gemma3:27b
+
 ## List recommended models for 16 GB VRAM
 models:
 	$(PYTHON) main.py --list-models

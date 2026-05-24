@@ -4,7 +4,10 @@ import logging
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import List, Optional
+from typing import TYPE_CHECKING, List, Optional
+
+if TYPE_CHECKING:
+    from src.data_sources.news_cache import NewsCache
 
 import feedparser
 import requests
@@ -38,11 +41,15 @@ class NewsFetcher:
         max_articles: int = 20,
         lookback_hours: int = 24,
         request_delay: float = 0.4,
+        cache: "Optional[NewsCache]" = None,
+        cache_ttl_minutes: int = 30,
     ) -> None:
         self.sources = sources
         self.max_articles = max_articles
         self.lookback_hours = lookback_hours
         self.request_delay = request_delay
+        self._cache = cache
+        self._cache_ttl = cache_ttl_minutes
         self._cutoff = datetime.now(timezone.utc) - timedelta(hours=lookback_hours)
 
     # ------------------------------------------------------------------
@@ -109,12 +116,27 @@ class NewsFetcher:
     def fetch_all(self) -> List[NewsArticle]:
         all_articles: List[NewsArticle] = []
         for source in self.sources:
+            # Check cache: skip HTTP fetch if recently cached
+            if self._cache and not self._cache.should_fetch(source.name, self._cache_ttl):
+                logger.debug("Cache hit: skipping fetch for '%s'", source.name)
+                time.sleep(0)  # preserve loop rhythm
+                continue
+
             if source.type == "rss":
                 articles = self._fetch_rss(source)
                 all_articles.extend(articles)
+                if self._cache and articles:
+                    self._cache.store(articles, source.name)
+                elif self._cache:
+                    # Mark as fetched even if no new articles, to update TTL
+                    self._cache.store([], source.name)
             time.sleep(self.request_delay)
 
-        # Deduplicate by title (case-insensitive)
+        # If cache is in use, return results from DB (includes older cached articles)
+        if self._cache:
+            return self._cache.get(self.lookback_hours, self.max_articles)
+
+        # No cache — deduplicate, sort, and return from memory
         seen: set[str] = set()
         unique: List[NewsArticle] = []
         for a in all_articles:

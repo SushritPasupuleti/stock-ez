@@ -43,7 +43,9 @@ RECOMMENDED_MODELS = [
     ("mistral-small3.2:24b", "~14 GB", "Mistral Small 3.2 — latest Mistral, fits in 16 GB"),
     ("deepseek-r1:14b",      "~9 GB",  "DeepSeek R1 — strong chain-of-thought reasoning"),
     ("phi4:14b",              "~9 GB",  "Microsoft Phi-4 — compact but capable"),
+    ("gemma3:27b",            "~17 GB", "Google Gemma 3 27B — largest Gemma, near 16 GB limit"),
     ("gemma3:12b",            "~8 GB",  "Google Gemma 3 12B — balanced quality"),
+    ("qwen3.5:9b",            "~6 GB",  "Qwen3.5 9B — next-gen Qwen, efficient mid-size"),
     ("qwen3:8b",              "~5 GB",  "Qwen3 8B — fast, still supports thinking mode"),
 ]
 
