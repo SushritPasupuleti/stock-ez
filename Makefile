@@ -3,7 +3,7 @@ PYTHON := $(UV) run python
 
 .PHONY: install venv sync add upgrade lock run run-fast run-no-stream \
         run-verbose run-model models pull-model pull-model-fast \
-        search-fund clean clean-all clean-reports help
+        search-fund ui clean clean-all clean-reports help
 
 # ── Setup ───────────────────────────────────────────────────────────────────
 
@@ -72,6 +72,12 @@ run-verbose:
 ## Run with a custom model   Usage: make run-model MODEL=mistral-small3.2:24b
 run-model:
 	$(PYTHON) main.py --model $(MODEL)
+
+# ── Streamlit UI ─────────────────────────────────────────────────────────────
+
+## Launch the Streamlit web UI
+ui:
+	$(UV) run streamlit run app.py
 
 # ── Fund search ──────────────────────────────────────────────────────────────
 

@@ -107,3 +107,40 @@ class OllamaClient:
             stream=False,
         )
         return response.message.content or ""
+
+    def token_stream(self, system_prompt: str, user_prompt: str) -> Iterator[str]:
+        """Yield tokens one at a time — designed for use with st.write_stream()."""
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ]
+        options = {"temperature": self.temperature, "num_ctx": self.num_ctx}
+        for chunk in self._client.chat(
+            model=self.model,
+            messages=messages,
+            options=options,
+            stream=True,
+        ):
+            yield chunk.message.content or ""
+
+    def pull_model_stream(
+        self,
+    ) -> Iterator[tuple[str, float]]:
+        """Pull (download) the model, yielding (status_message, fraction) tuples.
+
+        fraction is in [0.0, 1.0] — best-effort based on byte progress.
+        Designed for driving a st.progress() bar in the Streamlit UI.
+        """
+        for chunk in self._client.pull(model=self.model, stream=True):
+            status: str = chunk.status or ""
+            total = getattr(chunk, "total", None)
+            completed = getattr(chunk, "completed", None)
+            if total and completed:
+                fraction = min(float(completed) / float(total), 1.0)
+            elif status == "success":
+                fraction = 1.0
+            elif status in ("verifying sha256 digest", "writing manifest"):
+                fraction = 0.99
+            else:
+                fraction = 0.0
+            yield status, fraction
