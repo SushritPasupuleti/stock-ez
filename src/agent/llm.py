@@ -3,7 +3,14 @@ from __future__ import annotations
 import logging
 from typing import Iterator, Optional
 
+import httpx
 import ollama
+
+# Local LLMs can take several minutes to generate a full analysis over a large
+# context window.  Use a short connect timeout (fail fast if Ollama isn't
+# running) and a generous read timeout that covers even the slowest 7B model
+# on CPU-only hardware.
+_TIMEOUT = httpx.Timeout(connect=5.0, read=600.0, write=30.0, pool=5.0)
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +32,7 @@ class OllamaClient:
         self.base_url = base_url
         self.temperature = temperature
         self.num_ctx = num_ctx
-        self._client = ollama.Client(host=base_url)
+        self._client = ollama.Client(host=base_url, timeout=_TIMEOUT)
 
     # ------------------------------------------------------------------
     # Health checks

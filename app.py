@@ -45,6 +45,54 @@ MODELS: list[str] = [
     "qwen3:8b",
 ]
 
+# ── Lookback presets ──────────────────────────────────────────────────────────
+# Maps display label → lookback hours (0 = custom)
+_LOOKBACK_PRESETS: dict[str, int] = {
+    "Last 24h": 24,
+    "Last 48h": 48,
+    "Last 3 Days": 72,
+    "Last Week": 168,
+    "Last 2 Weeks": 336,
+    "Last Month": 720,
+    "Custom": 0,
+}
+
+# Suggested max_articles per preset — balanced for signal richness vs. LLM context size.
+# Rule of thumb: enough articles to cover the window without flooding the prompt.
+_LOOKBACK_ARTICLE_DEFAULTS: dict[str, int] = {
+    "Last 24h": 20,
+    "Last 48h": 30,
+    "Last 3 Days": 45,
+    "Last Week": 60,
+    "Last 2 Weeks": 80,
+    "Last Month": 100,
+}
+# For custom durations: ~1.5 articles per hour, clamped to [15, 150]
+_CUSTOM_ARTICLES_RATE: float = 1.5
+_ARTICLES_WARN_THRESHOLD: int = 100  # above this, warn about LLM context pressure
+
+
+def _suggested_max(preset_label: str, custom_hours: int = 24) -> int:
+    """Return the default max_articles for the given lookback preset/hours."""
+    if preset_label == "Custom":
+        return max(15, min(150, int(_CUSTOM_ARTICLES_RATE * custom_hours)))
+    return _LOOKBACK_ARTICLE_DEFAULTS.get(preset_label, 20)
+
+
+# Callbacks fired by the selectbox / number-input on_change events.
+# They update max_articles_input *before* the widget re-renders so the
+# number input automatically resets to the new suggested default.
+def _on_lookback_preset_change() -> None:
+    label = st.session_state.get("lookback_preset", "Last 24h")
+    custom_h = int(st.session_state.get("custom_hours_input", 24))
+    st.session_state["max_articles_input"] = _suggested_max(label, custom_h)
+
+
+def _on_custom_hours_change() -> None:
+    custom_h = int(st.session_state.get("custom_hours_input", 24))
+    st.session_state["max_articles_input"] = _suggested_max("Custom", custom_h)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Helpers
 # ─────────────────────────────────────────────────────────────────────────────
@@ -323,23 +371,17 @@ with st.sidebar:
 
     # ── News lookback ─────────────────────────────────────────────────────────
     st.subheader("⏱️ News Lookback")
-    _LOOKBACK_PRESETS = {
-        "Last 24h": 24,
-        "Last 48h": 48,
-        "Last 3 Days": 72,
-        "Last Week": 168,
-        "Last 2 Weeks": 336,
-        "Last Month": 720,
-        "Custom": 0,
-    }
     _preset_label = st.selectbox(
-        "Quick select",
+        "Duration preset",
         list(_LOOKBACK_PRESETS.keys()),
         index=0,
         key="lookback_preset",
+        on_change=_on_lookback_preset_change,
+        help="Pick a time window; max articles will auto-adjust to a sensible default.",
     )
     _preset_hours = _LOOKBACK_PRESETS[_preset_label]
-    if _preset_hours == 0:
+
+    if _preset_hours == 0:  # ── Custom ───────────────────────────────────────
         lookback = int(
             st.number_input(
                 "Custom hours",
@@ -347,11 +389,80 @@ with st.sidebar:
                 max_value=8760,
                 value=max(1, int(_base.news.lookback_hours)),
                 step=1,
+                key="custom_hours_input",
+                on_change=_on_custom_hours_change,
+                help="Any value from 1 h to 8 760 h (1 year).",
             )
         )
-    else:
+        _prev_d = lookback / 24
+        st.caption(
+            f"Window: {lookback}h"
+            + (f" (~{_prev_d:.1f} days)" if lookback >= 24 else "")
+        )
+    else:  # ── Preset ─────────────────────────────────────────────────────────
         lookback = _preset_hours
-        st.caption(f"{_preset_hours}h window · approx {_preset_hours // 24}d" if _preset_hours >= 24 else f"{_preset_hours}h window")
+        _days, _rem_h = divmod(_preset_hours, 24)
+        _parts: list[str] = ([f"{_days}d"] if _days else []) + ([f"{_rem_h}h"] if _rem_h else [])
+        st.caption(f"Window: {' '.join(_parts)} of news history")
+
+    # ── Max articles ──────────────────────────────────────────────────────────
+    # Compute the suggested value for the current preset + custom hours.
+    _custom_h_now = int(st.session_state.get("custom_hours_input", int(_base.news.lookback_hours)))
+    _cur_suggested = _suggested_max(_preset_label, _custom_h_now)
+
+    # Seed on first load (before any widget has been interacted with).
+    if "max_articles_input" not in st.session_state:
+        st.session_state["max_articles_input"] = _cur_suggested
+
+    st.markdown("**📑 Max articles**")
+    # The reset button is rendered first (column c2) so its click handler fires
+    # before the number_input (column c1) is rendered, allowing session_state
+    # to be updated in the same rerun.
+    _ma_c2, _ma_c1 = st.columns([1, 4])
+    with _ma_c2:
+        if st.button(
+            "↺",
+            key="reset_ma_btn",
+            help=f"Reset to suggested default ({_cur_suggested})",
+            use_container_width=True,
+        ):
+            st.session_state["max_articles_input"] = _cur_suggested
+    with _ma_c1:
+        max_articles = st.number_input(
+            "Max articles",
+            min_value=5,
+            max_value=500,
+            step=5,
+            key="max_articles_input",
+            label_visibility="collapsed",
+            help=(
+                f"Suggested for **{_preset_label}**: {_cur_suggested}.  \n"
+                "Increase for broader coverage; decrease for faster runs and "
+                "lower LLM token usage."
+            ),
+        )
+
+    # Contextual feedback below the inputs
+    _ma_val = int(max_articles)
+    _ma_ratio = _ma_val / max(_cur_suggested, 1)
+    if _ma_val > _ARTICLES_WARN_THRESHOLD:
+        st.warning(
+            f"{_ma_val} articles may exceed the default LLM context window "
+            f"({_base.llm.num_ctx:,} tokens). Consider raising Context Window "
+            f"in Model settings or reducing to ≤ {_ARTICLES_WARN_THRESHOLD}."
+        )
+    elif _ma_ratio > 1.5:
+        st.caption(
+            f"↑ {_ma_val} articles (suggested {_cur_suggested}) "
+            "— token usage will be higher than usual."
+        )
+    elif _ma_ratio < 0.5:
+        st.caption(
+            f"↓ {_ma_val} articles (suggested {_cur_suggested}) "
+            "— news coverage may be sparse."
+        )
+    else:
+        st.caption(f"✓ {_ma_val} articles · suggested {_cur_suggested}")
 
     # ── News cache stats ──────────────────────────────────────────────────────
     try:
@@ -400,6 +511,7 @@ def _build_settings() -> Settings:
     s.region.name = region_name
     s.region.market = market
     s.news.lookback_hours = int(lookback)
+    s.news.max_articles = int(max_articles)
     s.watchlist.stocks = [
         StockEntry(symbol=str(row["Symbol"]).strip(), name=str(row.get("Name", "")).strip())
         for _, row in edited_stocks.iterrows()
