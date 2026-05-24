@@ -700,8 +700,8 @@ if st.session_state.run_requested:
 # ─────────────────────────────────────────────────────────────────────────────
 # Tabs
 # ─────────────────────────────────────────────────────────────────────────────
-tab_overview, tab_stocks, tab_funds, tab_portfolio, tab_news, tab_raw, tab_reports = st.tabs(
-    ["📊 Overview", "📈 Stocks", "💼 Funds", "💰 Portfolio", "📰 News", "🗂️ Raw Data", "🗃️ Reports"]
+tab_overview, tab_stocks, tab_funds, tab_portfolio, tab_news, tab_raw, tab_reports, tab_help = st.tabs(
+    ["📊 Overview", "📈 Stocks", "💼 Funds", "💰 Portfolio", "📰 News", "🗂️ Raw Data", "🗃️ Reports", "❓ Help"]
 )
 
 _has_data: bool = st.session_state.analysis is not None
@@ -714,7 +714,8 @@ with tab_overview:
             "**Quick start:**\n"
             "1. Check Ollama is running (`ollama serve`)\n"
             "2. Confirm model is pulled (`ollama pull qwen3:14b`)\n"
-            "3. Click **▶ Run Analysis** in the sidebar"
+            "3. Click **▶ Run Analysis** in the sidebar\n\n"
+            "➡️ New here? Open the **❓ Help** tab for a full feature guide and glossary."
         )
     else:
         _indices_list: list[StockData] = st.session_state.indices
@@ -1311,3 +1312,350 @@ with tab_reports:
 
             st.divider()
             st.markdown(_sel_report.read_text(encoding="utf-8"))
+
+# ── Help & Glossary ────────────────────────────────────────────────────────────
+with tab_help:
+    st.title("❓ Help & Getting Started")
+    st.caption(
+        "Everything you need to know about Stock-EZ — always available, "
+        "no analysis run required."
+    )
+
+    # ── Quick-start ──────────────────────────────────────────────────────────
+    with st.expander("🚀 Quick Start (5 steps)", expanded=False):
+        st.markdown("""
+**1 — Install Ollama and pull a model**
+```bash
+# macOS / Linux
+brew install ollama          # or download from https://ollama.com
+ollama pull qwen3:14b        # recommended default (~9 GB)
+```
+
+**2 — Install Stock-EZ dependencies**
+```bash
+git clone https://github.com/SushritPasupuleti/stock-ez
+cd stock-ez
+make install      # creates a .venv via uv and installs all packages
+```
+
+**3 — Launch the UI**
+```bash
+make ui           # opens http://localhost:8501
+```
+
+**4 — Configure your watchlist (sidebar)**
+- Expand **📋 Stocks Watchlist** to add/remove NSE stocks (e.g. `RELIANCE.NS`)
+- Expand **💼 Funds Watchlist** to add mutual fund scheme codes (e.g. `119551`)
+- Use the **🔍 Find fund scheme code** search box to look up AMFI codes
+- Adjust the **Ollama URL** if your model server is not on localhost
+- Click **💾 Save Config** to persist your watchlist to `config.yaml`
+
+**5 — Run an analysis**
+- Click **▶ Run Analysis** in the sidebar
+- The app fetches live prices, NAVs, and news, then streams an AI summary
+- Results appear across the **Overview**, **Stocks**, **Funds**, and **Portfolio** tabs
+""")
+
+    # ── Feature tour ─────────────────────────────────────────────────────────
+    with st.expander("🗺️ Feature Tour — what each tab does", expanded=True):
+        st.markdown("""
+| Tab | What you will find |
+|---|---|
+| **📊 Overview** | Market index metrics (NIFTY 50, SENSEX), AI market sentiment, top risks, and caution list |
+| **📈 Stocks** | Watchlist price table (1D / 5D / 1M returns, P/E, market cap, 52-week range) + AI stock picks |
+| **💼 Funds** | Mutual fund NAV table (1M / 3M / 6M / 1Y returns) + AI fund recommendations |
+| **💰 Portfolio** | Unrealised P&L dashboard, Gold & Silver Market Pulse (always visible), position editor |
+| **📰 News** | Financial news from 5+ sources, filterable by outlet |
+| **🗂️ Raw Data** | Unformatted price tables and full LLM markdown output |
+| **🗃️ Reports** | Saved Markdown and PDF analysis reports with download buttons |
+| **❓ Help** | This guide + glossary |
+
+---
+
+**Portfolio tab — always-on features**
+
+The **Gold & Silver Market Pulse** section is always shown (no analysis run needed). It displays:
+- Live COMEX spot prices converted to ₹/gram
+- RSI(14) momentum signal
+- Position vs 50-day and 200-day moving averages
+- 52-week return context
+- A composite **BUY / HOLD / SELL** signal refreshed every hour
+- Gold/Silver ratio with historical context
+
+---
+
+**Sidebar quick reference**
+
+| Control | Purpose |
+|---|---|
+| **Ollama model** | Which local LLM to use |
+| **Ollama URL** | Ollama server address (default `http://localhost:11434`) |
+| **Temperature** | AI creativity — 0 = focused, 1 = varied |
+| **Context window** | Max tokens fed to the LLM |
+| **🔌 Check connection** | Verify Ollama is running and the model is downloaded |
+| **⬇️ Pull model** | Download a model that is not yet available locally |
+| **Region / Market** | NSE vs BSE preference for symbol resolution |
+| **Stocks Watchlist** | Add / remove NSE/BSE symbols |
+| **Funds Watchlist** | Add / remove AMFI scheme codes |
+| **🔍 Find fund code** | Search AMFI by fund name |
+| **💾 Save Config** | Write current watchlist + settings to `config.yaml` |
+| **⏱️ News Lookback** | How far back to fetch news |
+| **📑 Max articles** | Cap on articles passed to the LLM |
+| **▶ Run Analysis** | Trigger a full data fetch + AI analysis |
+""")
+
+    # ── Asset types & symbols ────────────────────────────────────────────────
+    with st.expander("🏷️ Asset Types & Symbol Formats", expanded=True):
+        st.markdown("""
+| Asset type | Format | Example | Notes |
+|---|---|---|---|
+| **stock** | `TICKER.NS` or `TICKER.BO` | `HDFCBANK.NS` | App auto-retries `.BO` if `.NS` has no data |
+| **etf** | `TICKER.NS` | `NIFTYBEES.NS` | Same format as stocks |
+| **fund** | AMFI scheme code (number) | `119551` | Use the 🔍 search box to find codes |
+| **gold** | Any label | `GOLD_COINS` | Quantity in **grams**, price in **₹/gram** — live rate from COMEX |
+| **silver** | Any label | `SILVER_BARS` | Quantity in **grams**, price in **₹/gram** — live rate from COMEX |
+
+> **Tip:** To find an AMFI scheme code, open the **🔍 Find fund scheme code** expander  
+> in the sidebar and type part of the fund name.
+""")
+
+    # ── Docker ───────────────────────────────────────────────────────────────
+    with st.expander("🐳 Running via Docker"):
+        st.markdown("""
+Stock-EZ ships with a multi-stage `Dockerfile` that produces a lean Python 3.11-slim image.
+
+```bash
+# Build for your current machine
+make docker-build
+
+# Build for Apple Silicon (M-series)
+make docker-build-arm64
+
+# Build for Intel / AMD x86-64
+make docker-build-amd64
+
+# Run — mounts your local data/ reports/ config.yaml as volumes
+make docker-run
+```
+
+**Connecting to Ollama from Docker**
+
+Your Ollama process runs on the host, not inside the container. Update `config.yaml`:
+
+```yaml
+llm:
+  base_url: "http://host.docker.internal:11434"
+```
+
+On Linux the container automatically adds `--add-host=host.docker.internal:host-gateway`.  
+On macOS with Docker Desktop, `host.docker.internal` resolves automatically.
+
+**Volumes mounted by `make docker-run`**
+
+| Container path | Host path | Purpose |
+|---|---|---|
+| `/app/data` | `./data` | SQLite portfolio + news cache (persistent) |
+| `/app/reports` | `./reports` | Saved Markdown / PDF reports (persistent) |
+| `/app/config.yaml` | `./config.yaml` | Watchlist + settings (read-only) |
+""")
+
+    # ── Glossary ─────────────────────────────────────────────────────────────
+    with st.expander("📖 Glossary", expanded=True):
+        st.markdown("""
+### Technical Analysis
+
+**RSI — Relative Strength Index**
+A momentum oscillator scaled 0–100 that measures how fast prices are changing.
+- **< 30** — Oversold: price may have fallen too sharply, potential buying opportunity
+- **30–45** — Weak / recovering momentum
+- **45–55** — Neutral territory
+- **55–70** — Strong upward momentum
+- **> 70** — Overbought: price may have risen too sharply, potential selling pressure
+
+*Stock-EZ uses Wilder's 14-period exponential smoothing — the original RSI definition.*
+
+---
+
+**Moving Average (MA50, MA200)**
+The average closing price over the last N trading days. Smooths noise and reveals trends.
+- **Price > MA200** → long-term uptrend
+- **Price < MA200** → long-term downtrend
+- **MA50 crossing above MA200** → "Golden Cross" (bullish)
+- **MA50 crossing below MA200** → "Death Cross" (bearish)
+
+---
+
+**52-Week High / Low**
+The highest and lowest traded prices over the trailing 52 weeks. Shows where the current price sits in its annual range.
+
+---
+
+**Gold/Silver Ratio**
+Gold spot price ÷ silver spot price. Measures relative value between the two metals.
+- **> 85** — Silver is historically cheap vs gold; may favour adding silver
+- **65–85** — Normal historical range; neutral signal
+- **< 65** — Gold is historically cheap vs silver; may favour adding gold
+
+---
+
+**P/E Ratio — Price-to-Earnings**
+Stock price ÷ earnings per share. How much investors pay for each rupee of profit.
+- High P/E → expensive, or strong growth expected
+- Low P/E → cheap, or slow growth / concerns
+- Compare within the same sector for a meaningful signal
+
+---
+
+**Market Cap — Market Capitalisation**
+Total market value of a company (Price × Outstanding Shares). Shown in **₹ Crore** (1 Crore = 10 million).
+- **Large-cap** > ₹20,000 Cr
+- **Mid-cap** ₹5,000–20,000 Cr
+- **Small-cap** < ₹5,000 Cr
+
+---
+
+**1D / 5D / 1M %**
+Price returns over 1 trading day, 5 trading days, and 1 calendar month. Green = positive, red = negative.
+
+---
+
+**Unrealised P&L**
+Paper profit/loss on positions you still hold:
+`(Current Price − Buy Price) × Quantity`
+Also shown as a % of your cost basis. "Unrealised" means you have not yet sold.
+
+---
+
+**Cost Basis**
+Total amount originally invested: `Buy Price × Quantity`
+
+---
+
+### Asset Classes
+
+**ETF — Exchange Traded Fund**
+A fund that tracks an index, sector, or commodity and trades on a stock exchange like a regular share. Bought and sold in real time at market prices (unlike mutual funds which settle at end-of-day NAV).
+
+**NAV — Net Asset Value**
+Per-unit value of a mutual fund, published once daily after market close:
+`NAV = (Total Assets − Liabilities) ÷ Outstanding Units`
+Mutual fund orders execute at the next published NAV, not a live price.
+
+**COMEX**
+The commodity exchange division of CME Group (Chicago), where gold (`GC=F`) and silver (`SI=F`) futures are the global pricing benchmark. Stock-EZ pulls these via Yahoo Finance, converts USD → INR via the live exchange rate (`USDINR=X`), then converts troy ounces to grams.
+
+**Troy Ounce**
+Standard weight unit for precious metals: **1 troy oz = 31.1035 grams**
+Stock-EZ stores and displays gold/silver quantities in grams for everyday convenience.
+
+---
+
+### Exchanges & Indices
+
+**NSE — National Stock Exchange of India**
+India's largest equity exchange by volume. Symbols end in `.NS` (e.g. `RELIANCE.NS`).
+
+**BSE — Bombay Stock Exchange**
+India's oldest exchange. Symbols end in `.BO` (e.g. `RELIANCE.BO`). Stock-EZ auto-falls back to `.BO` if a `.NS` symbol returns no data.
+
+**NIFTY 50**
+NSE's benchmark index tracking the 50 largest and most liquid Indian stocks.
+
+**SENSEX**
+BSE's benchmark index tracking the 30 largest Indian companies.
+
+**AMFI — Association of Mutual Funds in India**
+The industry body that publishes daily NAVs for all registered mutual funds. Stock-EZ fetches NAV data from the free **mfapi.in** public API using AMFI scheme codes.
+
+---
+
+### LLM / AI Settings
+
+**Ollama**
+Free open-source tool to run LLMs locally. No data ever leaves your machine. [ollama.com](https://ollama.com)
+
+**Temperature**
+Controls output randomness.
+- **0.0** — Highly predictable (recommended for analysis)
+- **0.5** — Balanced
+- **1.0** — Creative but prone to hallucination
+
+**Context window (num_ctx)**
+Maximum tokens the LLM processes at once. One token ≈ 0.75 English words.
+- **4,096** — Fast, minimal; small watchlists only
+- **8,192** — Default — handles most run configurations
+- **16,384** — Larger watchlists or week-long news windows
+- **32,768** — Maximum — slow on CPU, best with a GPU
+
+**Tokens**
+The unit LLMs count text in. Roughly 1 token ≈ 4 characters or 0.75 words. Your prompt + AI response must together fit inside the context window.
+
+---
+
+### News Settings
+
+**Lookback window**
+How far back in time to collect news (hours). Longer windows give richer context but increase token usage and analysis time.
+
+**Max articles**
+Hard cap on articles included in the AI prompt. Stock-EZ auto-suggests a sensible value based on your lookback window; use the ↺ reset button to restore the suggestion.
+
+**News cache**
+Articles are stored in `data/news_cache.db` (SQLite) to avoid re-downloading duplicates. The sidebar shows cache stats and provides a clear button.
+""")
+
+    # ── FAQ ───────────────────────────────────────────────────────────────────
+    with st.expander("🙋 FAQ", expanded=True):
+        st.markdown("""
+**Q: Do I need an internet connection?**
+Yes — for live prices (Yahoo Finance), NAVs (mfapi.in), and news (RSS feeds).
+The LLM analysis itself runs fully offline via Ollama.
+
+---
+
+**Q: My stock symbol shows no data. What should I try?**
+1. Confirm the symbol ends in `.NS` (NSE) or `.BO` (BSE)
+2. Verify it exists on Yahoo Finance: search `TICKER.NS` on finance.yahoo.com
+3. The app automatically retries `.BO` when `.NS` is empty, but you can also add the `.BO` variant directly to the watchlist
+
+---
+
+**Q: My mutual fund is not found. How do I find the right code?**
+Use the **🔍 Find fund scheme code** expander in the sidebar — it queries AMFI via mfapi.in.
+You can also visit [mfapi.in](https://mfapi.in) and browse or search there.
+
+---
+
+**Q: The AI analysis looks cut off or incomplete. Why?**
+The response hit the context window limit. Try:
+- Reducing **Max articles** in the sidebar
+- Raising the **Context window** slider (16,384 or 32,768)
+- Using a model with a larger native context (e.g. `mistral-small3.2:24b`)
+
+---
+
+**Q: How often are gold/silver signals refreshed?**
+Market Pulse signals are cached for **1 hour**. Restart the app or wait for the TTL to expire to force a fresh fetch.
+
+---
+
+**Q: Where is my portfolio data stored?**
+In `data/portfolio.db` (SQLite). In Docker, this is preserved via the `./data:/app/data` volume mount. Back up this file to keep your portfolio history.
+
+---
+
+**Q: Can I add my own news sources?**
+Yes — edit the `news.sources` list in `config.yaml`. Any RSS feed URL is supported.
+
+---
+
+**Q: Is this financial advice?**
+No. Stock-EZ is an educational data aggregation and AI analysis tool.
+Always consult a SEBI-registered Investment Adviser (RIA) before making investment decisions.
+Past performance is not indicative of future results.
+""")
+
+    st.caption(
+        "Stock-EZ · for educational purposes only · "
+        "not SEBI-registered investment advice"
+    )
