@@ -44,6 +44,32 @@ class StockFetcher:
     # ------------------------------------------------------------------
 
     def fetch_stock(self, symbol: str, name: str) -> Optional[StockData]:
+        """
+        Fetch data for *symbol*, with an automatic BSE (.BO) fallback when
+        an NSE (.NS) symbol returns empty history.  This handles transient
+        Yahoo Finance data gaps without removing stocks from the watchlist.
+        The original symbol is always preserved in the returned StockData so
+        that portfolio matching continues to work correctly.
+        """
+        data = self._fetch_single(symbol, name)
+        if data is None and symbol.upper().endswith(".NS"):
+            bo_symbol = symbol[:-3] + ".BO"
+            logger.debug(
+                "NSE fetch failed for %s — retrying with BSE equivalent %s",
+                symbol, bo_symbol,
+            )
+            data = self._fetch_single(bo_symbol, name)
+            if data is not None:
+                # Keep the original .NS symbol so watchlist/portfolio references
+                # remain consistent; only the exchange used for pricing differs.
+                data.symbol = symbol
+                logger.info(
+                    "Using BSE data for %s (NSE feed unavailable)", symbol
+                )
+        return data
+
+    def _fetch_single(self, symbol: str, name: str) -> Optional[StockData]:
+        """Raw single-ticker fetch — no fallback logic."""
         try:
             ticker = yf.Ticker(symbol)
             hist = ticker.history(period="1mo", auto_adjust=True)

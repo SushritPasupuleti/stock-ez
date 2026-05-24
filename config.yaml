@@ -128,8 +128,8 @@ watchlist:
     - symbol: "BEL.NS"
       name: "Bharat Electronics"
     # ── New-age / Consumer Tech ───────────────────────────────────────────
-    - symbol: "ZOMATO.NS"
-      name: "Zomato"
+    - symbol: "ETERNAL.NS"
+      name: "Eternal (Zomato)"
     - symbol: "NYKAA.NS"
       name: "Nykaa (FSN E-Commerce)"
 
