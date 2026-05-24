@@ -150,3 +150,5 @@ dist
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 .vite/
+src/.DS_Store
+.DS_Store

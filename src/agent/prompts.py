@@ -47,6 +47,9 @@ ANALYSIS_PROMPT = """\
 ### Your Portfolio (user's current holdings)
 {portfolio_data}
 
+### Investment Budget for This Cycle
+{investment_budget}
+
 ---
 
 ## Your Analysis
@@ -100,6 +103,24 @@ RBI policy, global risk sentiment) that typically drive precious metal prices \
 in India — do not recommend specific price targets. \
 If a position is listed as N/A (no live price available), skip it entirely. \
 If the portfolio is empty, omit this section and do not invent any positions.
+
+### 7. Investment Allocation Plan
+*(Only if a budget was provided above — skip entirely if it says "Not specified")*
+
+Based on the budget and the recommendations in Sections 2 and 3, suggest how to \
+split the capital across the top picks. Prioritise diversification and avoid \
+concentrating more than 40% in a single instrument. Factor in the investor's \
+existing portfolio (reduce weight for positions already overweight). \
+Note SIP minimums (typically ₹500–₹1,000/month) and equity lot-size constraints.
+
+Present the allocation as a markdown table:
+
+| Instrument | Type | Action | Suggested Amount (₹) | % of Budget | Entry Strategy | Rationale |
+|------------|------|--------|----------------------|-------------|----------------|-----------|
+| SYMBOL     | Stock/Fund | BUY/SIP | ₹XX,XXX | XX% | Lump sum / SIP ₹X,000/mo | 1-line reason |
+
+Below the table, add a one-paragraph summary of the overall strategy for this \
+deployment (e.g. "60% equities spread across …, 40% into …").
 
 ### Disclaimer
 [Include the standard disclaimer from your system instructions.]

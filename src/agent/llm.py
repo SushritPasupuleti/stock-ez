@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 from typing import Iterator, Optional
 
@@ -151,3 +152,161 @@ class OllamaClient:
             else:
                 fraction = 0.0
             yield status, fraction
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# vLLM — OpenAI-compatible backend
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Maps Ollama model names → HuggingFace model IDs and recommended settings.
+# AWQ INT4 variants are preferred for the NVIDIA 4060 Ti 16 GB.
+# HF IDs may need updating as new model releases appear on HuggingFace.
+VLLM_MODEL_CONFIG: dict[str, dict] = {
+    "qwen3:14b":                    {"hf_id": "Qwen/Qwen3-14B-AWQ",                              "quant": "awq",  "vram_gb": 9},
+    "qwen3.5:9b":                   {"hf_id": "Qwen/Qwen3.5-9B-Instruct-AWQ",                   "quant": "awq",  "vram_gb": 6},
+    "qwen3:8b":                     {"hf_id": "Qwen/Qwen3-8B-AWQ",                               "quant": "awq",  "vram_gb": 6},
+    "mistral-small3.2:24b":         {"hf_id": "mistralai/Mistral-Small-3.2-24B-Instruct-2506",   "quant": "gptq", "vram_gb": 14},
+    "deepseek-r1:14b-distill-qwen": {"hf_id": "deepseek-ai/DeepSeek-R1-Distill-Qwen-14B",        "quant": "awq",  "vram_gb": 9},
+    "deepseek-r1:14b":              {"hf_id": "deepseek-ai/DeepSeek-R1-Distill-Qwen-14B",        "quant": "awq",  "vram_gb": 9},
+    "gpt-oss:20b":                  {"hf_id": "openai/gpt-oss-20b",                              "quant": "awq",  "vram_gb": 11},
+    "phi4:14b":                     {"hf_id": "microsoft/phi-4-awq",                             "quant": "awq",  "vram_gb": 8},
+    "gemma3:27b":                   {"hf_id": "google/gemma-3-27b-it",                           "quant": "awq",  "vram_gb": 15},
+    "gemma3:12b":                   {"hf_id": "google/gemma-3-12b-it",                           "quant": "awq",  "vram_gb": 8},
+}
+
+
+def build_vllm_serve_cmd(
+    model_name: str,
+    vllm_url: str = "http://localhost:8000",
+    gpu_util: float = 0.88,
+    cpu_offload_gb: int = 16,
+    max_model_len: int = 32768,
+) -> str:
+    """Return the optimal `vllm serve` command for NVIDIA 4060 Ti 16 GB + 32 GB RAM.
+
+    - FP16 arithmetic (fast on Ampere/Ada, avoids BF16 compatibility issues)
+    - AWQ or GPTQ quantization to fit the model inside 16 GB VRAM
+    - 88 % GPU utilisation (leaves ~1.9 GB headroom for KV-cache spikes)
+    - 16 GB CPU offload via --cpu-offload-gb (uses system RAM for overflow layers)
+    - --enforce-eager disables CUDA-graph capture, saving ~1-2 GB on first load
+    """
+    cfg = VLLM_MODEL_CONFIG.get(model_name, {})
+    hf_id = cfg.get("hf_id", model_name)
+    quant = cfg.get("quant", "awq")
+    try:
+        port = vllm_url.rstrip("/").rsplit(":", 1)[-1]
+        int(port)  # validate it's actually a port number
+    except (ValueError, IndexError):
+        port = "8000"
+    lines = [
+        f"vllm serve {hf_id}",
+        f"  --dtype float16",
+        f"  --quantization {quant}",
+        f"  --gpu-memory-utilization {gpu_util}",
+        f"  --cpu-offload-gb {cpu_offload_gb}",
+        f"  --max-model-len {max_model_len}",
+        f"  --enforce-eager",
+        f"  --tensor-parallel-size 1",
+        f"  --port {port}",
+    ]
+    return " \\
+".join(lines)
+
+
+class VLLMClient:
+    """Client for vLLM's OpenAI-compatible REST API.
+
+    Connects to a running `vllm serve` instance and streams chat completions
+    via Server-Sent Events (SSE).  Drop-in replacement for OllamaClient —
+    both expose the same ``token_stream`` interface used by st.write_stream().
+    """
+
+    def __init__(
+        self,
+        model: str,
+        base_url: str = "http://localhost:8000",
+        temperature: float = 0.3,
+        num_ctx: int = 8192,
+    ) -> None:
+        self.model = model
+        self.base_url = base_url.rstrip("/")
+        self.temperature = temperature
+        self.num_ctx = num_ctx  # sent as max_tokens to the API
+
+    # ------------------------------------------------------------------
+    # Health checks
+    # ------------------------------------------------------------------
+
+    def check_connection(self) -> bool:
+        """Return True if the vLLM server is reachable."""
+        try:
+            resp = httpx.get(
+                f"{self.base_url}/v1/models",
+                timeout=httpx.Timeout(connect=5.0, read=10.0, write=5.0, pool=5.0),
+            )
+            return resp.status_code == 200
+        except Exception as exc:
+            logger.error("Cannot reach vLLM at %s: %s", self.base_url, exc)
+            return False
+
+    def get_loaded_models(self) -> list[str]:
+        """Return model IDs currently served by this vLLM instance."""
+        try:
+            resp = httpx.get(
+                f"{self.base_url}/v1/models",
+                timeout=httpx.Timeout(connect=5.0, read=10.0, write=5.0, pool=5.0),
+            )
+            data = resp.json()
+            return [m["id"] for m in data.get("data", [])]
+        except Exception:
+            return []
+
+    def check_model(self) -> bool:
+        """Return True if self.model is loaded in the running vLLM instance."""
+        loaded = self.get_loaded_models()
+        # Accept partial match: 'Qwen/Qwen3-14B-AWQ' matches 'qwen3-14b-awq'
+        model_lower = self.model.lower().replace("/", "-")
+        for m in loaded:
+            m_lower = m.lower().replace("/", "-")
+            if model_lower in m_lower or m_lower in model_lower:
+                return True
+        return False
+
+    # ------------------------------------------------------------------
+    # Generation
+    # ------------------------------------------------------------------
+
+    def token_stream(self, system_prompt: str, user_prompt: str) -> Iterator[str]:
+        """Yield tokens one at a time via SSE — designed for st.write_stream()."""
+        payload = {
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            "temperature": self.temperature,
+            "max_tokens": self.num_ctx,
+            "stream": True,
+        }
+        with httpx.stream(
+            "POST",
+            f"{self.base_url}/v1/chat/completions",
+            json=payload,
+            timeout=_TIMEOUT,
+            headers={"Accept": "text/event-stream", "Content-Type": "application/json"},
+        ) as resp:
+            resp.raise_for_status()
+            for line in resp.iter_lines():
+                if not line or not line.startswith("data: "):
+                    continue
+                chunk_str = line[len("data: "):]
+                if chunk_str.strip() == "[DONE]":
+                    break
+                try:
+                    chunk = json.loads(chunk_str)
+                    delta = chunk["choices"][0]["delta"]
+                    token = delta.get("content") or ""
+                    if token:
+                        yield token
+                except (KeyError, json.JSONDecodeError):
+                    continue

@@ -15,7 +15,7 @@ import streamlit as st
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from src.agent.llm import OllamaClient
+from src.agent.llm import OllamaClient, VLLMClient, VLLM_MODEL_CONFIG, build_vllm_serve_cmd
 from src.agent.prompts import ANALYSIS_PROMPT, SYSTEM_PROMPT
 from src.config.settings import FundEntry, Settings, StockEntry
 from src.data_sources.funds import FundData, FundFetcher
@@ -35,14 +35,36 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
+# ── Custom CSS ────────────────────────────────────────────────────────────────
+st.markdown("""
+<style>
+/* Tighter, consistent metric labels */
+[data-testid="stMetricLabel"] { font-size: 0.8rem !important; color: #6b7280; }
+[data-testid="stMetricValue"] { font-size: 1.35rem !important; font-weight: 700; }
+[data-testid="stMetricDelta"] { font-size: 0.82rem !important; }
+/* Bolder tab labels */
+button[data-baseweb="tab"] p { font-weight: 600; font-size: 0.85rem; }
+/* Sidebar expander headers */
+section[data-testid="stSidebar"] details summary p { font-weight: 600; font-size: 0.9rem; }
+/* Subtle rounded containers */
+[data-testid="stVerticalBlockBorderWrapper"] { border-radius: 10px !important; }
+/* Run button emphasis */
+section[data-testid="stSidebar"] button[kind="primary"] { letter-spacing: 0.04em; font-size: 1rem; }
+/* Slightly smaller caption text */
+[data-testid="stCaptionContainer"] p { font-size: 0.78rem; }
+</style>
+""", unsafe_allow_html=True)
+
 MODELS: list[str] = [
     "qwen3:14b",
+    "qwen3.5:9b",
     "mistral-small3.2:24b",
+    "deepseek-r1:14b-distill-qwen",
     "deepseek-r1:14b",
+    "gpt-oss:20b",
     "phi4:14b",
     "gemma3:27b",
     "gemma3:12b",
-    "qwen3.5:9b",
     "qwen3:8b",
 ]
 
@@ -211,6 +233,7 @@ _DEFAULTS: dict[str, object] = {
     "conn_status": None,   # None | "ok" | "no_model" | "no_conn"
     "conn_model": None,    # which model the last check was for
     "conn_url": None,      # which URL the last check was for
+    "conn_backend": None,  # "ollama" | "vllm"
     # config persistence
     "save_config_requested": False,
     # pdf report from last run
@@ -248,251 +271,7 @@ with st.sidebar:
     st.caption("AI-powered investment analysis · local LLM")
     st.divider()
 
-    # ── Model ─────────────────────────────────────────────────────────────────
-    st.subheader("🤖 Model")
-    _model_idx = MODELS.index(_base.llm.model) if _base.llm.model in MODELS else 0
-    selected_model = st.selectbox("Ollama model", MODELS, index=_model_idx)
-    ollama_url = st.text_input("Ollama URL", value=_base.llm.base_url)
-    temperature = st.slider("Temperature", 0.0, 1.0, float(_base.llm.temperature), 0.05)
-    context_window = st.select_slider(
-        "Context window",
-        options=[4096, 8192, 16384, 32768],
-        value=_base.llm.num_ctx,
-    )
-
-    # Reset stored status when user picks a different model or URL
-    if (
-        st.session_state.conn_model != selected_model
-        or st.session_state.conn_url != ollama_url
-    ):
-        st.session_state.conn_status = None
-
-    if st.button("🔌 Check connection", use_container_width=True):
-        _chk = OllamaClient(model=selected_model, base_url=ollama_url)
-        _conn = _chk.check_connection()
-        _mdl = _chk.check_model() if _conn else False
-        st.session_state.conn_model = selected_model
-        st.session_state.conn_url = ollama_url
-        if _conn and _mdl:
-            st.session_state.conn_status = "ok"
-        elif _conn:
-            st.session_state.conn_status = "no_model"
-        else:
-            st.session_state.conn_status = "no_conn"
-
-    # ── Persistent connection status + pull button ─────────────────────────
-    _cs = st.session_state.conn_status
-    if _cs == "ok":
-        st.success(f"✓ Ollama running · **{selected_model}** available")
-    elif _cs == "no_conn":
-        st.error(f"Cannot reach Ollama at `{ollama_url}`")
-    elif _cs == "no_model":
-        st.warning(f"**{selected_model}** not found locally.")
-        if st.button(
-            f"⬇️ Pull {selected_model}",
-            use_container_width=True,
-            key="pull_model_btn",
-        ):
-            _puller = OllamaClient(model=selected_model, base_url=ollama_url)
-            _pull_status = st.empty()
-            _pull_bar = st.progress(0.0)
-            try:
-                for _msg, _pct in _puller.pull_model_stream():
-                    _pull_status.caption(f"⏬ {_msg}")
-                    if _pct > 0:
-                        _pull_bar.progress(_pct)
-                _pull_bar.progress(1.0)
-                _pull_status.empty()
-                _pull_bar.empty()
-                st.success(f"✓ **{selected_model}** downloaded!")
-                st.session_state.conn_status = "ok"
-            except Exception as _pe:
-                _pull_status.empty()
-                _pull_bar.empty()
-                st.error(f"Pull failed: {_pe}")
-
-    st.divider()
-
-    # ── Region ────────────────────────────────────────────────────────────────
-    st.subheader("🌍 Region")
-    region_name = st.text_input("Region name", value=_base.region.name)
-    market = st.selectbox(
-        "Market",
-        ["NSE", "BSE"],
-        index=0 if _base.region.market == "NSE" else 1,
-    )
-    st.divider()
-
-    # ── Stocks watchlist ──────────────────────────────────────────────────────
-    st.subheader("📋 Stocks Watchlist")
-    _stocks_df = pd.DataFrame(
-        [{"Symbol": s.symbol, "Name": s.name} for s in _base.watchlist.stocks]
-    )
-    edited_stocks = st.data_editor(
-        _stocks_df,
-        num_rows="dynamic",
-        use_container_width=True,
-        hide_index=True,
-        key="stocks_editor",
-        column_config={
-            "Symbol": st.column_config.TextColumn("Symbol", help="e.g. RELIANCE.NS"),
-            "Name": st.column_config.TextColumn("Company name"),
-        },
-    )
-
-    # ── Funds watchlist ───────────────────────────────────────────────────────
-    st.subheader("💼 Funds Watchlist")
-    _funds_df = pd.DataFrame(
-        [{"Code": f.scheme_code, "Name": f.name} for f in _base.watchlist.funds]
-    )
-    edited_funds = st.data_editor(
-        _funds_df,
-        num_rows="dynamic",
-        use_container_width=True,
-        hide_index=True,
-        key="funds_editor",
-        column_config={
-            "Code": st.column_config.TextColumn(
-                "Scheme Code", help="Find via the search box below"
-            ),
-            "Name": st.column_config.TextColumn("Fund name"),
-        },
-    )
-
-    with st.expander("🔍 Find fund scheme code"):
-        _q = st.text_input("Search", placeholder="Axis Bluechip", key="fund_search")
-        if _q:
-            with st.spinner("Searching mfapi.in…"):
-                _results = FundFetcher.search(_q, limit=10)
-            if _results:
-                for _r in _results:
-                    st.code(
-                        f"{_r.get('schemeCode', '')}  {_r.get('schemeName', '')}",
-                        language=None,
-                    )
-            else:
-                st.caption("No results found.")
-
-    if st.button("💾 Save Config to config.yaml", use_container_width=True, type="secondary"):
-        st.session_state.save_config_requested = True
-
-    st.divider()
-
-    # ── News lookback ─────────────────────────────────────────────────────────
-    st.subheader("⏱️ News Lookback")
-    _preset_label = st.selectbox(
-        "Duration preset",
-        list(_LOOKBACK_PRESETS.keys()),
-        index=0,
-        key="lookback_preset",
-        on_change=_on_lookback_preset_change,
-        help="Pick a time window; max articles will auto-adjust to a sensible default.",
-    )
-    _preset_hours = _LOOKBACK_PRESETS[_preset_label]
-
-    if _preset_hours == 0:  # ── Custom ───────────────────────────────────────
-        lookback = int(
-            st.number_input(
-                "Custom hours",
-                min_value=1,
-                max_value=8760,
-                value=max(1, int(_base.news.lookback_hours)),
-                step=1,
-                key="custom_hours_input",
-                on_change=_on_custom_hours_change,
-                help="Any value from 1 h to 8 760 h (1 year).",
-            )
-        )
-        _prev_d = lookback / 24
-        st.caption(
-            f"Window: {lookback}h"
-            + (f" (~{_prev_d:.1f} days)" if lookback >= 24 else "")
-        )
-    else:  # ── Preset ─────────────────────────────────────────────────────────
-        lookback = _preset_hours
-        _days, _rem_h = divmod(_preset_hours, 24)
-        _parts: list[str] = ([f"{_days}d"] if _days else []) + ([f"{_rem_h}h"] if _rem_h else [])
-        st.caption(f"Window: {' '.join(_parts)} of news history")
-
-    # ── Max articles ──────────────────────────────────────────────────────────
-    # Compute the suggested value for the current preset + custom hours.
-    _custom_h_now = int(st.session_state.get("custom_hours_input", int(_base.news.lookback_hours)))
-    _cur_suggested = _suggested_max(_preset_label, _custom_h_now)
-
-    # Seed on first load (before any widget has been interacted with).
-    if "max_articles_input" not in st.session_state:
-        st.session_state["max_articles_input"] = _cur_suggested
-
-    st.markdown("**📑 Max articles**")
-    # The reset button is rendered first (column c2) so its click handler fires
-    # before the number_input (column c1) is rendered, allowing session_state
-    # to be updated in the same rerun.
-    _ma_c2, _ma_c1 = st.columns([1, 4])
-    with _ma_c2:
-        if st.button(
-            "↺",
-            key="reset_ma_btn",
-            help=f"Reset to suggested default ({_cur_suggested})",
-            use_container_width=True,
-        ):
-            st.session_state["max_articles_input"] = _cur_suggested
-    with _ma_c1:
-        max_articles = st.number_input(
-            "Max articles",
-            min_value=5,
-            max_value=500,
-            step=5,
-            key="max_articles_input",
-            label_visibility="collapsed",
-            help=(
-                f"Suggested for **{_preset_label}**: {_cur_suggested}.  \n"
-                "Increase for broader coverage; decrease for faster runs and "
-                "lower LLM token usage."
-            ),
-        )
-
-    # Contextual feedback below the inputs
-    _ma_val = int(max_articles)
-    _ma_ratio = _ma_val / max(_cur_suggested, 1)
-    if _ma_val > _ARTICLES_WARN_THRESHOLD:
-        st.warning(
-            f"{_ma_val} articles may exceed the default LLM context window "
-            f"({_base.llm.num_ctx:,} tokens). Consider raising Context Window "
-            f"in Model settings or reducing to ≤ {_ARTICLES_WARN_THRESHOLD}."
-        )
-    elif _ma_ratio > 1.5:
-        st.caption(
-            f"↑ {_ma_val} articles (suggested {_cur_suggested}) "
-            "— token usage will be higher than usual."
-        )
-    elif _ma_ratio < 0.5:
-        st.caption(
-            f"↓ {_ma_val} articles (suggested {_cur_suggested}) "
-            "— news coverage may be sparse."
-        )
-    else:
-        st.caption(f"✓ {_ma_val} articles · suggested {_cur_suggested}")
-
-    # ── News cache stats ──────────────────────────────────────────────────────
-    try:
-        _sidebar_cache = NewsCache()
-        _sc_stats = _sidebar_cache.stats()
-        _sc_total = _sc_stats["total_articles"]
-        if _sc_total > 0:
-            _sc_age = _sc_stats.get("oldest_age_hours")
-            _age_str = f" · oldest {_sc_age:.0f}h ago" if _sc_age else ""
-            st.caption(f"📦 News cache: {_sc_total} articles{_age_str}")
-            if st.button("🗑️ Clear news cache", use_container_width=True, key="clear_cache_btn"):
-                _sidebar_cache.clear()
-                st.success("Cache cleared")
-        else:
-            st.caption("📦 News cache: empty")
-    except Exception:
-        pass
-
-    st.divider()
-
-    # ── Run ───────────────────────────────────────────────────────────────────
+    # ── Run (pinned at top for quick access) ──────────────────────────────────
     _run_btn = st.button(
         "▶ Run Analysis",
         type="primary",
@@ -507,16 +286,353 @@ with st.sidebar:
             f"Last run: {st.session_state.last_run.strftime('%d %b %Y · %H:%M')}"
         )
 
+    invest_budget = int(
+        st.number_input(
+            "💰 Investment Budget (₹)",
+            min_value=0,
+            max_value=100_000_000,
+            step=5_000,
+            value=int(st.session_state.get("invest_budget_input", 0)),
+            key="invest_budget_input",
+            help=(
+                "How much you plan to invest in this analysis cycle. "
+                "The AI will suggest a per-pick allocation breakdown. "
+                "Leave at 0 to skip allocation guidance."
+            ),
+            format="%d",
+        )
+    )
+    if invest_budget > 0:
+        st.caption(f"₹{invest_budget:,.0f} to allocate across recommendations")
+    else:
+        st.caption("Set a budget to get per-pick allocation guidance")
+
+    st.divider()
+
+    # ── Model ─────────────────────────────────────────────────────────────────
+    with st.expander("🤖 Model", expanded=True):
+        # ── Backend toggle ────────────────────────────────────────────
+        _be_default = 1 if _base.llm.backend == "vllm" else 0
+        _be_choice = st.radio(
+            "Backend",
+            ["Ollama", "vLLM"],
+            index=_be_default,
+            horizontal=True,
+            help="Ollama: easy local setup via GGUF.  vLLM: high-throughput GPU inference via HuggingFace.",
+        )
+        llm_backend = "vllm" if _be_choice == "vLLM" else "ollama"
+
+        # ── Model selector (shared) ──────────────────────────────
+        _model_idx = MODELS.index(_base.llm.model) if _base.llm.model in MODELS else 0
+        selected_model = st.selectbox("Model", MODELS, index=_model_idx)
+
+        # Show HF model ID hint for vLLM
+        if llm_backend == "vllm":
+            _vllm_hf_id = VLLM_MODEL_CONFIG.get(selected_model, {}).get("hf_id", selected_model)
+            _vllm_vram  = VLLM_MODEL_CONFIG.get(selected_model, {}).get("vram_gb", "?")
+            st.caption(f"🧠 HF: `{_vllm_hf_id}` · ~{_vllm_vram} GB VRAM (INT4)")
+
+        # ── Shared generation params ─────────────────────────────
+        temperature = st.slider("Temperature", 0.0, 1.0, float(_base.llm.temperature), 0.05)
+        context_window = st.select_slider(
+            "Context window",
+            options=[4096, 8192, 16384, 32768],
+            value=_base.llm.num_ctx,
+        )
+
+        st.divider()
+
+        if llm_backend == "ollama":
+            # ── Ollama controls ────────────────────────────────────
+            ollama_url = st.text_input("Ollama URL", value=_base.llm.base_url)
+            vllm_url   = _base.llm.vllm_url  # keep last saved value passive
+
+            # Reset status when model, URL, or backend changes
+            if (
+                st.session_state.conn_model   != selected_model
+                or st.session_state.conn_url  != ollama_url
+                or st.session_state.conn_backend != "ollama"
+            ):
+                st.session_state.conn_status = None
+
+            if st.button("🔌 Check connection", use_container_width=True, key="ollama_check_btn"):
+                _chk = OllamaClient(model=selected_model, base_url=ollama_url)
+                _conn = _chk.check_connection()
+                _mdl  = _chk.check_model() if _conn else False
+                st.session_state.conn_model   = selected_model
+                st.session_state.conn_url     = ollama_url
+                st.session_state.conn_backend = "ollama"
+                if _conn and _mdl:
+                    st.session_state.conn_status = "ok"
+                elif _conn:
+                    st.session_state.conn_status = "no_model"
+                else:
+                    st.session_state.conn_status = "no_conn"
+
+            _cs = st.session_state.conn_status
+            if _cs == "ok":
+                st.success(f"✓ Ollama running · **{selected_model}** available")
+            elif _cs == "no_conn":
+                st.error(f"Cannot reach Ollama at `{ollama_url}`")
+            elif _cs == "no_model":
+                st.warning(f"**{selected_model}** not found locally.")
+                if st.button(
+                    f"⬇️ Pull {selected_model}",
+                    use_container_width=True,
+                    key="pull_model_btn",
+                ):
+                    _puller = OllamaClient(model=selected_model, base_url=ollama_url)
+                    _pull_status = st.empty()
+                    _pull_bar    = st.progress(0.0)
+                    try:
+                        for _msg, _pct in _puller.pull_model_stream():
+                            _pull_status.caption(f"⏬ {_msg}")
+                            if _pct > 0:
+                                _pull_bar.progress(_pct)
+                        _pull_bar.progress(1.0)
+                        _pull_status.empty()
+                        _pull_bar.empty()
+                        st.toast(f"✓ {selected_model} downloaded!", icon="✅")
+                        st.session_state.conn_status = "ok"
+                    except Exception as _pe:
+                        _pull_status.empty()
+                        _pull_bar.empty()
+                        st.error(f"Pull failed: {_pe}")
+
+        else:
+            # ── vLLM controls ─────────────────────────────────────
+            vllm_url   = st.text_input("vLLM URL", value=_base.llm.vllm_url)
+            ollama_url = _base.llm.base_url  # keep last saved value passive
+
+            # Reset status when model, URL, or backend changes
+            if (
+                st.session_state.conn_model   != selected_model
+                or st.session_state.conn_url  != vllm_url
+                or st.session_state.conn_backend != "vllm"
+            ):
+                st.session_state.conn_status = None
+
+            if st.button("🔌 Check connection", use_container_width=True, key="vllm_check_btn"):
+                _vchk  = VLLMClient(model=selected_model, base_url=vllm_url)
+                _conn  = _vchk.check_connection()
+                _mdl   = _vchk.check_model() if _conn else False
+                _loaded = _vchk.get_loaded_models() if _conn else []
+                st.session_state.conn_model    = selected_model
+                st.session_state.conn_url      = vllm_url
+                st.session_state.conn_backend  = "vllm"
+                st.session_state["vllm_loaded"] = _loaded
+                if _conn and _mdl:
+                    st.session_state.conn_status = "ok"
+                elif _conn:
+                    st.session_state.conn_status = "no_model"
+                else:
+                    st.session_state.conn_status = "no_conn"
+
+            _cs = st.session_state.conn_status
+            if _cs == "ok":
+                st.success(f"✓ vLLM running · **{selected_model}** loaded")
+            elif _cs == "no_conn":
+                st.error(f"Cannot reach vLLM at `{vllm_url}`")
+            elif _cs == "no_model":
+                _loaded_ids = st.session_state.get("vllm_loaded", [])
+                _ids_str    = ", ".join(f"`{m}`" for m in _loaded_ids) if _loaded_ids else "none"
+                st.warning(
+                    f"vLLM is running but **{selected_model}** is not loaded.  \n"
+                    f"Currently serving: {_ids_str}"
+                )
+
+            # Launch command (always shown for vLLM — easy copy/paste)
+            _serve_cmd = build_vllm_serve_cmd(selected_model, vllm_url)
+            _vllm_hf   = VLLM_MODEL_CONFIG.get(selected_model, {}).get("hf_id", selected_model)
+            with st.expander("📋 Launch command (4060 Ti 16 GB optimised)", expanded=_cs != "ok"):
+                st.caption(f"HuggingFace model ID: `{_vllm_hf}`")
+                st.code(_serve_cmd, language="bash")
+                st.caption(
+                    "💡 FP16 · AWQ/GPTQ INT4 · 88 % GPU util (~14 GB of 16 GB) · "
+                    "16 GB CPU offload (uses system RAM for overflow layers) · "
+                    "--enforce-eager reduces KV-cache overhead at first load."
+                )
+
+    # ── Region ────────────────────────────────────────────────────────────────
+    with st.expander("🌍 Region & Market", expanded=False):
+        region_name = st.text_input("Region name", value=_base.region.name)
+        market = st.selectbox(
+            "Market",
+            ["NSE", "BSE"],
+            index=0 if _base.region.market == "NSE" else 1,
+        )
+
+    # ── Watchlists ────────────────────────────────────────────────────────────
+    with st.expander("📋 Watchlists", expanded=False):
+        st.caption("**Stocks**")
+        _stocks_df = pd.DataFrame(
+            [{"Symbol": s.symbol, "Name": s.name} for s in _base.watchlist.stocks]
+        )
+        edited_stocks = st.data_editor(
+            _stocks_df,
+            num_rows="dynamic",
+            use_container_width=True,
+            hide_index=True,
+            key="stocks_editor",
+            column_config={
+                "Symbol": st.column_config.TextColumn("Symbol", help="e.g. RELIANCE.NS"),
+                "Name": st.column_config.TextColumn("Company name"),
+            },
+        )
+
+        st.caption("**Mutual Funds**")
+        _funds_df = pd.DataFrame(
+            [{"Code": f.scheme_code, "Name": f.name} for f in _base.watchlist.funds]
+        )
+        edited_funds = st.data_editor(
+            _funds_df,
+            num_rows="dynamic",
+            use_container_width=True,
+            hide_index=True,
+            key="funds_editor",
+            column_config={
+                "Code": st.column_config.TextColumn(
+                    "Scheme Code", help="Find via the search box below"
+                ),
+                "Name": st.column_config.TextColumn("Fund name"),
+            },
+        )
+
+        with st.expander("🔍 Find fund scheme code"):
+            _q = st.text_input("Search", placeholder="Axis Bluechip", key="fund_search")
+            if _q:
+                with st.spinner("Searching mfapi.in…"):
+                    _results = FundFetcher.search(_q, limit=10)
+                if _results:
+                    for _r in _results:
+                        st.code(
+                            f"{_r.get('schemeCode', '')}  {_r.get('schemeName', '')}",
+                            language=None,
+                        )
+                else:
+                    st.caption("No results found.")
+
+        if st.button("💾 Save Config to config.yaml", use_container_width=True, type="secondary"):
+            st.session_state.save_config_requested = True
+
+    # ── News settings ─────────────────────────────────────────────────────────
+    with st.expander("⏱️ News Settings", expanded=False):
+        _preset_label = st.selectbox(
+            "Lookback",
+            list(_LOOKBACK_PRESETS.keys()),
+            index=0,
+            key="lookback_preset",
+            on_change=_on_lookback_preset_change,
+            help="Pick a time window; max articles will auto-adjust to a sensible default.",
+        )
+        _preset_hours = _LOOKBACK_PRESETS[_preset_label]
+
+        if _preset_hours == 0:  # ── Custom ───────────────────────────────────────
+            lookback = int(
+                st.number_input(
+                    "Custom hours",
+                    min_value=1,
+                    max_value=8760,
+                    value=max(1, int(_base.news.lookback_hours)),
+                    step=1,
+                    key="custom_hours_input",
+                    on_change=_on_custom_hours_change,
+                    help="Any value from 1 h to 8 760 h (1 year).",
+                )
+            )
+            _prev_d = lookback / 24
+            st.caption(
+                f"Window: {lookback}h"
+                + (f" (~{_prev_d:.1f} days)" if lookback >= 24 else "")
+            )
+        else:  # ── Preset ─────────────────────────────────────────────────────────
+            lookback = _preset_hours
+            _days, _rem_h = divmod(_preset_hours, 24)
+            _parts: list[str] = ([f"{_days}d"] if _days else []) + ([f"{_rem_h}h"] if _rem_h else [])
+            st.caption(f"Window: {' '.join(_parts)} of news history")
+
+        # ── Max articles ──────────────────────────────────────────────────────
+        _custom_h_now = int(st.session_state.get("custom_hours_input", int(_base.news.lookback_hours)))
+        _cur_suggested = _suggested_max(_preset_label, _custom_h_now)
+
+        if "max_articles_input" not in st.session_state:
+            st.session_state["max_articles_input"] = _cur_suggested
+
+        st.markdown("**📑 Max articles**")
+        _ma_c2, _ma_c1 = st.columns([1, 4])
+        with _ma_c2:
+            if st.button(
+                "↺",
+                key="reset_ma_btn",
+                help=f"Reset to suggested default ({_cur_suggested})",
+                use_container_width=True,
+            ):
+                st.session_state["max_articles_input"] = _cur_suggested
+        with _ma_c1:
+            max_articles = st.number_input(
+                "Max articles",
+                min_value=5,
+                max_value=500,
+                step=5,
+                key="max_articles_input",
+                label_visibility="collapsed",
+                help=(
+                    f"Suggested for **{_preset_label}**: {_cur_suggested}.  \n"
+                    "Increase for broader coverage; decrease for faster runs and "
+                    "lower LLM token usage."
+                ),
+            )
+
+        _ma_val = int(max_articles)
+        _ma_ratio = _ma_val / max(_cur_suggested, 1)
+        if _ma_val > _ARTICLES_WARN_THRESHOLD:
+            st.warning(
+                f"{_ma_val} articles may exceed the default LLM context window "
+                f"({_base.llm.num_ctx:,} tokens). Consider raising Context Window "
+                f"in Model settings or reducing to ≤ {_ARTICLES_WARN_THRESHOLD}."
+            )
+        elif _ma_ratio > 1.5:
+            st.caption(
+                f"↑ {_ma_val} articles (suggested {_cur_suggested}) "
+                "— token usage will be higher than usual."
+            )
+        elif _ma_ratio < 0.5:
+            st.caption(
+                f"↓ {_ma_val} articles (suggested {_cur_suggested}) "
+                "— news coverage may be sparse."
+            )
+        else:
+            st.caption(f"✓ {_ma_val} articles · suggested {_cur_suggested}")
+
+        # ── News cache stats ──────────────────────────────────────────────────
+        try:
+            _sidebar_cache = NewsCache()
+            _sc_stats = _sidebar_cache.stats()
+            _sc_total = _sc_stats["total_articles"]
+            if _sc_total > 0:
+                _sc_age = _sc_stats.get("oldest_age_hours")
+                _age_str = f" · oldest {_sc_age:.0f}h ago" if _sc_age else ""
+                st.caption(f"📦 News cache: {_sc_total} articles{_age_str}")
+                if st.button("🗑️ Clear news cache", use_container_width=True, key="clear_cache_btn"):
+                    _sidebar_cache.clear()
+                    st.toast("🗑️ News cache cleared")
+            else:
+                st.caption("📦 News cache: empty")
+        except Exception:
+            pass
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Build runtime settings from sidebar values
 # ─────────────────────────────────────────────────────────────────────────────
 def _build_settings() -> Settings:
     s = Settings.load("config.yaml")
-    s.llm.model = selected_model
+    s.llm.model    = selected_model
     s.llm.base_url = ollama_url
+    s.llm.vllm_url = vllm_url
+    s.llm.backend  = llm_backend
     s.llm.temperature = temperature
-    s.llm.num_ctx = context_window
+    s.llm.num_ctx     = context_window
     s.region.name = region_name
     s.region.market = market
     s.news.lookback_hours = int(lookback)
@@ -541,7 +657,7 @@ if st.session_state.get("save_config_requested"):
         _s_to_save = _build_settings()
         _s_to_save.save("config.yaml")
         _load_settings.clear()
-        st.sidebar.success("✓ Saved to config.yaml")
+        st.toast("✓ Config saved to config.yaml", icon="💾")
     except Exception as _save_err:
         st.sidebar.error(f"Save failed: {_save_err}")
 
@@ -565,23 +681,50 @@ if st.session_state.run_requested:
     settings = _build_settings()
 
     # ── Preflight ──────────────────────────────────────────────────────────
-    _llm = OllamaClient(
-        model=settings.llm.model,
-        base_url=settings.llm.base_url,
-        temperature=settings.llm.temperature,
-        num_ctx=settings.llm.num_ctx,
-    )
-    if not _llm.check_connection():
-        st.error(f"❌ Cannot reach Ollama at **{settings.llm.base_url}**. Is it running?")
-        st.session_state.is_running = False
-        st.stop()
-    if not _llm.check_model():
-        st.warning(
-            f"⚠️ Model **{settings.llm.model}** not found locally.  \n"
-            f"Run `ollama pull {settings.llm.model}` then try again."
+    if settings.llm.backend == "vllm":
+        _vllm_cfg      = VLLM_MODEL_CONFIG.get(settings.llm.model, {})
+        _vllm_model_id = _vllm_cfg.get("hf_id", settings.llm.model)
+        _llm: OllamaClient | VLLMClient = VLLMClient(
+            model=_vllm_model_id,
+            base_url=settings.llm.vllm_url,
+            temperature=settings.llm.temperature,
+            num_ctx=settings.llm.num_ctx,
         )
-        st.session_state.is_running = False
-        st.stop()
+        if not _llm.check_connection():
+            st.error(
+                f"❌ Cannot reach vLLM at **{settings.llm.vllm_url}**.  \n"
+                "Start the server with the command shown in the 🤖 Model expander."
+            )
+            st.code(build_vllm_serve_cmd(settings.llm.model, settings.llm.vllm_url), language="bash")
+            st.session_state.is_running = False
+            st.stop()
+        if not _llm.check_model():
+            _loaded = _llm.get_loaded_models()  # type: ignore[union-attr]
+            st.warning(
+                f"⚠️ **{_vllm_model_id}** is not loaded in vLLM.  \n"
+                + (f"Currently serving: `{'`, `'.join(_loaded)}`" if _loaded else "No models loaded.")
+            )
+            st.code(build_vllm_serve_cmd(settings.llm.model, settings.llm.vllm_url), language="bash")
+            st.session_state.is_running = False
+            st.stop()
+    else:
+        _llm = OllamaClient(
+            model=settings.llm.model,
+            base_url=settings.llm.base_url,
+            temperature=settings.llm.temperature,
+            num_ctx=settings.llm.num_ctx,
+        )
+        if not _llm.check_connection():
+            st.error(f"❌ Cannot reach Ollama at **{settings.llm.base_url}**. Is it running?")
+            st.session_state.is_running = False
+            st.stop()
+        if not _llm.check_model():
+            st.warning(
+                f"⚠️ Model **{settings.llm.model}** not found locally.  \n"
+                f"Run `ollama pull {settings.llm.model}` then try again."
+            )
+            st.session_state.is_running = False
+            st.stop()
 
     # ── Data fetching ──────────────────────────────────────────────────────
     with st.status("Gathering market data…", expanded=True) as _status:
@@ -631,6 +774,15 @@ if st.session_state.run_requested:
     st.caption(f"Model: `{settings.llm.model}` · streaming…")
 
     _system_prompt = SYSTEM_PROMPT.format(region=settings.region.name)
+    _invest_budget_val = int(st.session_state.get("invest_budget_input", 0))
+    if _invest_budget_val > 0:
+        _budget_text = (
+            f"₹{_invest_budget_val:,.0f} — provide a suggested allocation breakdown "
+            f"across your top stock and fund picks in **Section 7**."
+        )
+    else:
+        _budget_text = "Not specified — omit Section 7 (Investment Allocation Plan)."
+
     _user_prompt = ANALYSIS_PROMPT.format(
         date=datetime.now().strftime("%Y-%m-%d %H:%M IST"),
         lookback_hours=settings.news.lookback_hours,
@@ -639,6 +791,7 @@ if st.session_state.run_requested:
         stocks_data=_stock_fetcher.format_for_prompt(_stocks),
         funds_data=_fund_fetcher.format_for_prompt(_funds),
         portfolio_data=_portfolio_text,
+        investment_budget=_budget_text,
     )
 
     with st.container(border=True):
@@ -693,7 +846,7 @@ if st.session_state.run_requested:
     st.session_state.last_run = datetime.now()
     st.session_state.is_running = False
 
-    st.success(f"✓ Analysis complete · report saved → `{_report_path}`")
+    st.toast("✓ Analysis complete!", icon="🎉")
     st.rerun()
 
 
@@ -709,15 +862,41 @@ _has_data: bool = st.session_state.analysis is not None
 # ── Overview ──────────────────────────────────────────────────────────────────
 with tab_overview:
     if not _has_data:
-        st.info(
-            "Run an analysis from the sidebar to see results here.\n\n"
-            "**Quick start:**\n"
-            "1. Check Ollama is running (`ollama serve`)\n"
-            "2. Confirm model is pulled (`ollama pull qwen3:14b`)\n"
-            "3. Click **▶ Run Analysis** in the sidebar\n\n"
-            "➡️ New here? Open the **❓ Help** tab for a full feature guide and glossary."
-        )
+        st.markdown("### Welcome to Stock-EZ 👋")
+        st.markdown("Run an analysis from the sidebar to see your market dashboard.")
+        _qs1, _qs2, _qs3 = st.columns(3)
+        with _qs1:
+            with st.container(border=True):
+                st.markdown("**1️⃣ Start Ollama**")
+                st.code("ollama serve", language="bash")
+        with _qs2:
+            with st.container(border=True):
+                st.markdown("**2️⃣ Pull a model**")
+                st.code("ollama pull qwen3:14b", language="bash")
+        with _qs3:
+            with st.container(border=True):
+                st.markdown("**3️⃣ Run analysis**")
+                st.markdown("Click **▶ Run Analysis** in the sidebar")
+        st.caption("➡️ New here? Open the **❓ Help** tab for a full feature guide and glossary.")
     else:
+        # Timestamp badge + PDF quick-download
+        _ov_meta_c, _ov_dl_c = st.columns([5, 1])
+        with _ov_meta_c:
+            if st.session_state.last_run:
+                st.caption(
+                    f"Analysis generated: {st.session_state.last_run.strftime('%d %b %Y · %H:%M IST')}"
+                )
+        with _ov_dl_c:
+            if st.session_state.get("report_pdf_bytes"):
+                st.download_button(
+                    "📄 PDF",
+                    data=st.session_state.report_pdf_bytes,
+                    file_name=st.session_state.report_pdf_name or "analysis.pdf",
+                    mime="application/pdf",
+                    use_container_width=True,
+                    help="Download this analysis as PDF",
+                )
+
         _indices_list: list[StockData] = st.session_state.indices
         _sections: dict[str, str] = st.session_state.sections
 
@@ -775,16 +954,24 @@ with tab_overview:
             st.markdown(_sections[_caut_key])
             st.divider()
 
+        # Investment Allocation Plan (shown when a budget was provided)
+        _alloc_plan_key = next(
+            (k for k in _sections if "Allocation Plan" in k or "Investment Allocation" in k),
+            None,
+        )
+        if _alloc_plan_key:
+            st.subheader("💸 Investment Allocation Plan")
+            _budget_display = int(st.session_state.get("invest_budget_input", 0))
+            if _budget_display > 0:
+                st.caption(f"Based on your budget of ₹{_budget_display:,.0f}")
+            st.markdown(_sections[_alloc_plan_key])
+            st.divider()
+
         # Disclaimer
         _disc_key = next((k for k in _sections if "Disclaimer" in k), None)
         if _disc_key:
             with st.expander("📋 Disclaimer"):
                 st.markdown(_sections[_disc_key])
-
-        if st.session_state.last_run:
-            st.caption(
-                f"Analysis generated: {st.session_state.last_run.strftime('%d %b %Y · %H:%M IST')}"
-            )
 
 # ── Stocks ─────────────────────────────────────────────────────────────────────
 with tab_stocks:
@@ -817,9 +1004,36 @@ with tab_stocks:
                     f"{_loser.change_1d_pct:+.2f}%",
                 )
                 _m3.metric("Total Stocks", len(_stocks_list))
-                st.divider()
 
+            # 1D % performance bar chart
+            _bar_data = {
+                s.symbol.replace(".NS", "").replace(".BO", ""): s.change_1d_pct
+                for s in _sorted_by_day
+            }
+            if _bar_data:
+                _bar_df = pd.DataFrame({"1D %": _bar_data}).sort_values("1D %")
+                st.bar_chart(_bar_df, height=220, use_container_width=True)
+
+            st.divider()
+
+            # Search / filter
+            _s_search = st.text_input(
+                "Filter stocks",
+                placeholder="Search by name, symbol, or sector…",
+                key="stock_filter",
+                label_visibility="collapsed",
+            )
             _sdf = stocks_to_df(_stocks_list)
+            if _s_search:
+                _sl = _s_search.lower()
+                _mask = (
+                    _sdf["Symbol"].str.lower().str.contains(_sl, na=False)
+                    | _sdf["Name"].str.lower().str.contains(_sl, na=False)
+                    | _sdf["Sector"].str.lower().str.contains(_sl, na=False)
+                )
+                _sdf = _sdf[_mask]
+                st.caption(f"{len(_sdf)} of {len(_stocks_list)} stocks shown")
+
             _pct_cols = ["1D %", "5D %", "1M %"]
             _styled_stocks = (
                 _sdf.style.map(_style_pct, subset=_pct_cols)
@@ -878,9 +1092,36 @@ with tab_funds:
                     f"{_worst.returns_1y:+.2f}%",
                 )
                 _fm3.metric("Total Funds", len(_funds_list))
-                st.divider()
 
+            # 1Y % performance bar chart
+            _fund_bar_data = {
+                (f.name[:20] + "…" if len(f.name) > 20 else f.name): f.returns_1y
+                for f in _valid_1y
+            }
+            if _fund_bar_data:
+                _fund_bar_df = pd.DataFrame({"1Y %": _fund_bar_data}).sort_values("1Y %")
+                st.bar_chart(_fund_bar_df, height=220, use_container_width=True)
+
+            st.divider()
+
+            # Search / filter
+            _f_search = st.text_input(
+                "Filter funds",
+                placeholder="Search by name, code, or category…",
+                key="fund_filter",
+                label_visibility="collapsed",
+            )
             _fdf = funds_to_df(_funds_list)
+            if _f_search:
+                _fl = _f_search.lower()
+                _fmask = (
+                    _fdf["Fund"].str.lower().str.contains(_fl, na=False)
+                    | _fdf["Code"].astype(str).str.lower().str.contains(_fl, na=False)
+                    | _fdf["Category"].str.lower().str.contains(_fl, na=False)
+                )
+                _fdf = _fdf[_fmask]
+                st.caption(f"{len(_fdf)} of {len(_funds_list)} funds shown")
+
             _fpct_cols = ["1M %", "3M %", "6M %", "1Y %"]
             _styled_funds = (
                 _fdf.style.map(_style_pct, subset=_fpct_cols)
@@ -979,6 +1220,20 @@ with tab_portfolio:
             _pmc2.metric("Current Value", "N/A")
             _pmc3.metric("Unrealised P&L", "N/A")
 
+        # Asset allocation breakdown chart
+        _alloc: dict[str, float] = {}
+        for _ep in _ep_list:
+            _t = _ep.position.asset_type
+            _val = _ep.current_value if _ep.current_value is not None else _ep.cost_basis
+            _alloc[_t] = _alloc.get(_t, 0.0) + _val
+        if len(_alloc) > 1:
+            _alloc_df = (
+                pd.DataFrame({"Value (₹)": _alloc})
+                .sort_values("Value (₹)", ascending=False)
+            )
+            with st.expander("📊 Allocation by asset type", expanded=True):
+                st.bar_chart(_alloc_df, height=200, use_container_width=True)
+
         st.divider()
 
         # Enriched positions table
@@ -1027,6 +1282,26 @@ with tab_portfolio:
             st.divider()
             st.subheader("🤖 AI Portfolio Review")
             st.markdown(st.session_state.sections[_port_rec_key])
+
+        # Investment Allocation Plan — visible here when a budget was set
+        _port_alloc_key = next(
+            (
+                k
+                for k in st.session_state.sections
+                if "Allocation Plan" in k or "Investment Allocation" in k
+            ),
+            None,
+        )
+        if _port_alloc_key:
+            st.divider()
+            _budget_val = int(st.session_state.get("invest_budget_input", 0))
+            st.subheader("💸 Investment Allocation Plan")
+            if _budget_val > 0:
+                st.caption(
+                    f"Suggested deployment of your ₹{_budget_val:,.0f} budget "
+                    "across this analysis cycle's top picks."
+                )
+            st.markdown(st.session_state.sections[_port_alloc_key])
 
         st.divider()
 
@@ -1138,7 +1413,7 @@ with tab_portfolio:
                 )
             )
         _port_store.upsert_bulk(_new_positions)
-        st.success(f"✓ Saved {len(_new_positions)} position(s)")
+        st.toast(f"✓ {len(_new_positions)} position(s) saved", icon="💾")
         st.rerun()
 
     if not _has_data and _positions_all:
@@ -1154,15 +1429,33 @@ with tab_news:
         st.info("Run an analysis from the sidebar to fetch news articles.")
     else:
         _sources_all = sorted({a.source for a in _news_list})
-        _col_filter, _col_count = st.columns([3, 1])
-        with _col_filter:
-            _sel_sources = st.multiselect(
-                "Filter by source", _sources_all, default=_sources_all
+        _nf_kw, _nf_src, _nf_cnt = st.columns([3, 3, 1])
+        with _nf_kw:
+            _kw_filter = st.text_input(
+                "Search news",
+                placeholder="Search headlines or summaries…",
+                key="news_kw_filter",
+                label_visibility="collapsed",
             )
-        with _col_count:
-            st.metric("Articles", len(_news_list))
+        with _nf_src:
+            _sel_sources = st.multiselect(
+                "Filter by source", _sources_all, default=_sources_all,
+                label_visibility="collapsed",
+            )
+        with _nf_cnt:
+            st.metric("Total", len(_news_list))
 
-        _filtered_news = [a for a in _news_list if a.source in _sel_sources]
+        _filtered_news = [
+            a for a in _news_list
+            if a.source in _sel_sources
+            and (
+                not _kw_filter
+                or _kw_filter.lower() in a.title.lower()
+                or _kw_filter.lower() in (a.summary or "").lower()
+            )
+        ]
+        if _kw_filter or len(_sel_sources) < len(_sources_all):
+            st.caption(f"{len(_filtered_news)} of {len(_news_list)} articles shown")
 
         for _article in _filtered_news:
             with st.expander(f"**{_article.title}**  —  *{_article.source}*"):
@@ -1264,13 +1557,19 @@ with tab_reports:
         _rc1, _rc2 = st.columns([4, 1])
         with _rc2:
             st.metric("Saved Reports", len(_report_files))
+
+        def _fmt_report_label(p: Path) -> str:
+            try:
+                _dt = datetime.strptime(p.stem, "analysis_%Y%m%d_%H%M%S")
+                return _dt.strftime("%d %b %Y · %H:%M")
+            except ValueError:
+                return p.stem.replace("analysis_", "").replace("_", " ")
+
         with _rc1:
             _sel_report = st.selectbox(
                 "Select report",
                 _report_files,
-                format_func=lambda p: (
-                    p.stem.replace("analysis_", "").replace("_", " ")
-                ),
+                format_func=_fmt_report_label,
             )
 
         if _sel_report:

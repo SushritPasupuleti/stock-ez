@@ -11,6 +11,8 @@ import yaml
 class LLMConfig:
     model: str = "qwen2.5:14b"
     base_url: str = "http://localhost:11434"
+    vllm_url: str = "http://localhost:8000"
+    backend: str = "ollama"  # "ollama" | "vllm"
     temperature: float = 0.3
     num_ctx: int = 8192
 
@@ -107,6 +109,8 @@ class Settings:
         llm = LLMConfig(
             model=llm_d.get("model", "qwen2.5:14b"),
             base_url=llm_d.get("base_url", "http://localhost:11434"),
+            vllm_url=llm_d.get("vllm_url", "http://localhost:8000"),
+            backend=llm_d.get("backend", "ollama"),
             temperature=float(llm_d.get("temperature", 0.3)),
             num_ctx=int(llm_d.get("num_ctx", 8192)),
         )
@@ -187,6 +191,8 @@ class Settings:
         data.setdefault("llm", {})
         data["llm"]["model"] = self.llm.model
         data["llm"]["base_url"] = self.llm.base_url
+        data["llm"]["vllm_url"] = self.llm.vllm_url
+        data["llm"]["backend"] = self.llm.backend
         data["llm"]["temperature"] = self.llm.temperature
         data["llm"]["num_ctx"] = self.llm.num_ctx
 
