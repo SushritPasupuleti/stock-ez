@@ -1,0 +1,100 @@
+# LLM Configuration
+# Recommended models for 16GB VRAM:
+#   qwen3:14b             (~9 GB)  — hybrid thinking, best overall (default)
+#   mistral-small3.2:24b  (~14 GB) — Mistral Small 3.2, fits in 16 GB
+#   deepseek-r1:14b       (~9 GB)  — strong chain-of-thought reasoning
+#   phi4:14b              (~9 GB)  — Microsoft Phi-4, compact & capable
+#   gemma3:12b            (~8 GB)  — Google Gemma 3 12B
+#   qwen3:8b              (~5 GB)  — fast, still supports thinking mode
+llm:
+  model: "qwen3:14b"
+  base_url: "http://localhost:11434"
+  temperature: 0.3
+  num_ctx: 8192
+
+# Region configuration — drives market suffix, currency symbol, and LLM context
+region:
+  country: "IN"
+  market: "NSE"          # NSE (National Stock Exchange) or BSE (Bombay Stock Exchange)
+  currency: "INR"
+  timezone: "Asia/Kolkata"
+  name: "Hyderabad, India"
+
+# Stocks to track (NSE: append .NS, BSE: append .BO)
+watchlist:
+  stocks:
+    - symbol: "RELIANCE.NS"
+      name: "Reliance Industries"
+    - symbol: "TCS.NS"
+      name: "Tata Consultancy Services"
+    - symbol: "INFY.NS"
+      name: "Infosys"
+    - symbol: "HDFCBANK.NS"
+      name: "HDFC Bank"
+    - symbol: "ICICIBANK.NS"
+      name: "ICICI Bank"
+    - symbol: "WIPRO.NS"
+      name: "Wipro"
+    - symbol: "LT.NS"
+      name: "Larsen & Toubro"
+    - symbol: "SBIN.NS"
+      name: "State Bank of India"
+    - symbol: "BAJFINANCE.NS"
+      name: "Bajaj Finance"
+    - symbol: "TITAN.NS"
+      name: "Titan Company"
+
+  # Mutual fund scheme codes from AMFI/mfapi.in
+  # Find codes: https://api.mfapi.in/mf/search?q=FUND_NAME
+  funds:
+    - scheme_code: "119551"
+      name: "HDFC Top 100 Fund - Direct Growth"
+    - scheme_code: "120503"
+      name: "Axis Bluechip Fund - Direct Growth"
+    - scheme_code: "125354"
+      name: "Parag Parikh Flexi Cap Fund - Direct Growth"
+    - scheme_code: "118825"
+      name: "Mirae Asset Large Cap Fund - Direct Growth"
+    - scheme_code: "135781"
+      name: "Navi Nifty 50 Index Fund - Direct Growth"
+
+# Market indices to include as context
+market_indices:
+  - symbol: "^NSEI"
+    name: "NIFTY 50"
+  - symbol: "^BSESN"
+    name: "SENSEX"
+  - symbol: "^NSMIDCP"
+    name: "NIFTY Midcap 100"
+  - symbol: "^CNXIT"
+    name: "NIFTY IT"
+
+# News sources (free, no API key required)
+news:
+  max_articles: 20
+  lookback_hours: 24
+  sources:
+    - name: "Economic Times Markets"
+      url: "https://economictimes.indiatimes.com/markets/rssfeeds/1977021501.cms"
+      type: "rss"
+    - name: "Economic Times Stocks"
+      url: "https://economictimes.indiatimes.com/markets/stocks/rssfeeds/2146842.cms"
+      type: "rss"
+    - name: "Moneycontrol Market Reports"
+      url: "https://www.moneycontrol.com/rss/marketreports.xml"
+      type: "rss"
+    - name: "Business Standard Markets"
+      url: "https://www.business-standard.com/rss/markets-106.rss"
+      type: "rss"
+    - name: "Mint Markets"
+      url: "https://www.livemint.com/rss/markets"
+      type: "rss"
+    - name: "Yahoo Finance India"
+      url: "https://feeds.finance.yahoo.com/rss/2.0/headline?s=^NSEI&region=IN&lang=en-US"
+      type: "rss"
+
+# Output settings
+output:
+  format: "rich"        # rich (colorized) or plain
+  save_report: true     # Save analysis as a markdown file
+  report_dir: "reports"

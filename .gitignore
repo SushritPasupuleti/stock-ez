@@ -1,3 +1,11 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+reports/
+
 # Logs
 logs
 *.log
