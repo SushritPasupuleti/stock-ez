@@ -209,8 +209,8 @@ def build_vllm_serve_cmd(
         f"  --tensor-parallel-size 1",
         f"  --port {port}",
     ]
-    return " \\
-".join(lines)
+    _sep = " \\\n"
+    return _sep.join(lines)
 
 
 class VLLMClient:
