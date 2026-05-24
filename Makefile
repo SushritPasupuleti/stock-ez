@@ -3,7 +3,9 @@ PYTHON := $(UV) run python
 
 .PHONY: install venv sync add upgrade lock run run-fast run-no-stream \
         run-verbose run-model models pull-model pull-model-fast \
-        search-fund ui clean clean-all clean-reports help
+        search-fund ui \
+        docker-build docker-build-arm64 docker-build-amd64 docker-push docker-run docker-clean \
+        clean clean-all clean-venv clean-reports help
 
 # ── Setup ───────────────────────────────────────────────────────────────────
 
@@ -86,6 +88,49 @@ run-model:
 ## Launch the Streamlit web UI
 ui:
 	$(UV) run streamlit run app.py
+
+# ── Docker ───────────────────────────────────────────────────────────────────
+
+IMAGE  ?= stock-ez
+TAG    ?= latest
+
+## Build a Docker image for the current machine's platform
+docker-build:
+	docker build -t $(IMAGE):$(TAG) .
+
+## Build for Apple Silicon / arm64  (requires: docker buildx)
+docker-build-arm64:
+	docker buildx build --platform linux/arm64 --load -t $(IMAGE):$(TAG)-arm64 .
+
+## Build for Intel / amd64  (requires: docker buildx)
+docker-build-amd64:
+	docker buildx build --platform linux/amd64 --load -t $(IMAGE):$(TAG)-amd64 .
+
+## Build and push a multi-arch manifest (arm64 + amd64) to a registry
+## Usage: make docker-push REGISTRY=docker.io/myuser
+docker-push:
+	docker buildx build \
+		--platform linux/arm64,linux/amd64 \
+		-t $(REGISTRY)/$(IMAGE):$(TAG) \
+		--push .
+
+## Run the Streamlit UI in Docker
+## Ollama must be running on the host; update config.yaml base_url to
+##   http://host.docker.internal:11434  before running this target.
+docker-run:
+	docker run --rm -it \
+		-p 8501:8501 \
+		-v "$(PWD)/data:/app/data" \
+		-v "$(PWD)/reports:/app/reports" \
+		-v "$(PWD)/config.yaml:/app/config.yaml:ro" \
+		--add-host=host.docker.internal:host-gateway \
+		$(IMAGE):$(TAG)
+
+## Stop and remove all containers built from this image
+docker-clean:
+	-docker ps -aq --filter "ancestor=$(IMAGE):$(TAG)"       | xargs docker rm -f 2>/dev/null; true
+	-docker ps -aq --filter "ancestor=$(IMAGE):$(TAG)-arm64" | xargs docker rm -f 2>/dev/null; true
+	-docker ps -aq --filter "ancestor=$(IMAGE):$(TAG)-amd64" | xargs docker rm -f 2>/dev/null; true
 
 # ── Fund search ──────────────────────────────────────────────────────────────
 

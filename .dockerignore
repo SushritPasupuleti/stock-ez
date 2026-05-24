@@ -1,0 +1,30 @@
+# Version control
+.git/
+.gitignore
+
+# Python artifacts
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+
+# Runtime data (mounted as Docker volumes)
+data/
+reports/
+
+# Development / CI
+.dockerignore
+*.lock.txt
+.ruff_cache/
+.mypy_cache/
+.pytest_cache/
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Docs (not needed at runtime)
+README.md
