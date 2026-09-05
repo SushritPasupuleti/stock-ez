@@ -93,6 +93,15 @@ ui:
 
 IMAGE  ?= stock-ez
 TAG    ?= latest
+BUILDX_NAME ?= stock-ez-builder
+GHCR_IMAGE ?= ghcr.io/$(shell git remote get-url origin | sed -E 's#(https://github.com/|git@github.com:|git://github.com/)([^/]+)/.*#\2#' | tr '[:upper:]' '[:lower:]')/stock-ez
+GHCR_TAG ?= latest
+
+## Create a Buildx builder that supports multi-platform builds
+buildx-init:
+	docker buildx inspect $(BUILDX_NAME) >/dev/null 2>&1 || docker buildx create --name $(BUILDX_NAME) --driver docker-container --use
+	docker buildx use $(BUILDX_NAME)
+	docker buildx inspect --bootstrap >/dev/null 2>&1 || true
 
 ## Build a Docker image for the current machine's platform
 docker-build:
@@ -108,10 +117,20 @@ docker-build-amd64:
 
 ## Build and push a multi-arch manifest (arm64 + amd64) to a registry
 ## Usage: make docker-push REGISTRY=docker.io/myuser
-docker-push:
+docker-push: buildx-init
 	docker buildx build \
 		--platform linux/arm64,linux/amd64 \
 		-t $(REGISTRY)/$(IMAGE):$(TAG) \
+		--push .
+
+## Build and push a multi-arch manifest to GitHub Container Registry (GHCR)
+## Usage: make docker-push-ghcr GHCR_IMAGE=ghcr.io/OWNER/stock-ez GHCR_TAG=latest
+## Requires: docker login ghcr.io
+
+docker-push-ghcr: buildx-init
+	docker buildx build \
+		--platform linux/arm64,linux/amd64 \
+		-t $(GHCR_IMAGE):$(GHCR_TAG) \
 		--push .
 
 ## Run the Streamlit UI in Docker

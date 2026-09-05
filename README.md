@@ -101,6 +101,26 @@ make docker-build-amd64
 make docker-push REGISTRY=docker.io/myuser
 ```
 
+### Publish to GitHub Container Registry (GHCR)
+
+This repo includes a GitHub Actions workflow that publishes the image to GHCR automatically on pushes to `main` and for version tags.
+
+```bash
+# 1) Log in once to GHCR
+export CR_PAT=YOUR_GITHUB_PAT
+docker login ghcr.io -u YOUR_GITHUB_USERNAME --password-stdin <<< "$CR_PAT"
+
+# 2) Push the image manually
+make docker-push-ghcr GHCR_IMAGE=ghcr.io/YOUR_GITHUB_USERNAME/stock-ez GHCR_TAG=latest
+```
+
+The workflow file is under `.github/workflows/ghcr-publish.yml` and will publish images such as:
+
+```text
+ghcr.io/YOUR_GITHUB_USERNAME/stock-ez:latest
+ghcr.io/YOUR_GITHUB_USERNAME/stock-ez:main
+```
+
 > **Linux note**: `--add-host=host.docker.internal:host-gateway` is included in  
 > `docker-run` so Ollama is reachable from inside the container on Linux.  
 > On macOS with Docker Desktop, `host.docker.internal` resolves automatically.
