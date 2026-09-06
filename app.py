@@ -323,8 +323,30 @@ with st.sidebar:
         llm_backend = "vllm" if _be_choice == "vLLM" else "ollama"
 
         # ── Model selector (shared) ──────────────────────────────
-        _model_idx = MODELS.index(_base.llm.model) if _base.llm.model in MODELS else 0
-        selected_model = st.selectbox("Model", MODELS, index=_model_idx)
+        _model_choices = ["Custom model…", *MODELS]
+        _base_model = str(_base.llm.model).strip()
+        _model_idx = (
+            _model_choices.index(_base_model)
+            if _base_model in _model_choices
+            else 0 if _base_model in MODELS else 0
+        )
+        model_preset = st.selectbox(
+            "Model",
+            _model_choices,
+            index=_model_idx,
+            help="Pick a preset or choose Custom model… to type your own Ollama / vLLM model name.",
+        )
+
+        custom_model_name = st.text_input(
+            "Custom model name",
+            value=_base_model if _base_model not in MODELS else "",
+            placeholder="qwen3:14b, llama3.2:latest, deepseek-r1:8b",
+            help="Type any model name installed in Ollama or a valid Hugging Face model ID for vLLM.",
+        )
+
+        selected_model = custom_model_name.strip() if model_preset == "Custom model…" else model_preset
+        if model_preset != "Custom model…":
+            custom_model_name = ""
 
         # Show HF model ID hint for vLLM
         if llm_backend == "vllm":
@@ -465,9 +487,55 @@ with st.sidebar:
     # ── Watchlists ────────────────────────────────────────────────────────────
     with st.expander("📋 Watchlists", expanded=False):
         st.caption("**Stocks**")
-        _stocks_df = pd.DataFrame(
-            [{"Symbol": s.symbol, "Name": s.name} for s in _base.watchlist.stocks]
+        _stocks_default_df = pd.DataFrame(
+            [
+                {"Symbol": s.symbol, "Name": s.name}
+                for s in _base.watchlist.stocks
+            ]
+        ) if _base.watchlist.stocks else pd.DataFrame(
+            [
+                {"Symbol": "RELIANCE.NS", "Name": "Reliance Industries"},
+                {"Symbol": "TCS.NS", "Name": "Tata Consultancy Services"},
+            ]
         )
+
+        _stocks_upload = st.file_uploader(
+            "Upload stock CSV",
+            type=["csv"],
+            key="stocks_csv_upload",
+            help="CSV columns can be Symbol,Name or Ticker,Company Name. The uploaded file will replace the stock watchlist.",
+        )
+        if _stocks_upload is not None:
+            try:
+                _stocks_df = pd.read_csv(_stocks_upload)
+                _stocks_df.columns = [str(c).strip() for c in _stocks_df.columns]
+                _stocks_alias_map = {
+                    "symbol": "Symbol",
+                    "ticker": "Symbol",
+                    "stock": "Symbol",
+                    "code": "Symbol",
+                    "company": "Name",
+                    "company name": "Name",
+                    "name": "Name",
+                }
+                _stocks_df = _stocks_df.rename(columns={c: _stocks_alias_map.get(str(c).strip().lower(), c) for c in _stocks_df.columns})
+                if "Symbol" not in _stocks_df.columns or "Name" not in _stocks_df.columns:
+                    raise ValueError("CSV must include Symbol and Name columns.")
+                _stocks_df = _stocks_df[["Symbol", "Name"]].copy()
+            except Exception as _stocks_upload_err:
+                st.warning(f"Could not read stock CSV: {_stocks_upload_err}")
+                _stocks_df = _stocks_default_df
+        else:
+            _stocks_df = _stocks_default_df
+
+        st.download_button(
+            "⬇️ Download stock sample CSV",
+            data=_stocks_df.to_csv(index=False).encode("utf-8"),
+            file_name="stock_watchlist.csv",
+            mime="text/csv",
+            help="Download the current stock watchlist as a CSV for editing and re-uploading later.",
+        )
+
         edited_stocks = st.data_editor(
             _stocks_df,
             num_rows="dynamic",
@@ -481,9 +549,52 @@ with st.sidebar:
         )
 
         st.caption("**Mutual Funds**")
-        _funds_df = pd.DataFrame(
+        _funds_default_df = pd.DataFrame(
             [{"Code": f.scheme_code, "Name": f.name} for f in _base.watchlist.funds]
+        ) if _base.watchlist.funds else pd.DataFrame(
+            [
+                {"Code": "119551", "Name": "Axis Bluechip Fund"},
+                {"Code": "100000", "Name": "HDFC Index Fund - Nifty 50"},
+            ]
         )
+
+        _funds_upload = st.file_uploader(
+            "Upload mutual fund CSV",
+            type=["csv"],
+            key="funds_csv_upload",
+            help="CSV columns can be Code,Name or Scheme Code,Scheme Name. The uploaded file will replace the fund watchlist.",
+        )
+        if _funds_upload is not None:
+            try:
+                _funds_df = pd.read_csv(_funds_upload)
+                _funds_df.columns = [str(c).strip() for c in _funds_df.columns]
+                _funds_alias_map = {
+                    "code": "Code",
+                    "scheme code": "Code",
+                    "scheme": "Code",
+                    "fund code": "Code",
+                    "name": "Name",
+                    "scheme name": "Name",
+                    "fund name": "Name",
+                }
+                _funds_df = _funds_df.rename(columns={c: _funds_alias_map.get(str(c).strip().lower(), c) for c in _funds_df.columns})
+                if "Code" not in _funds_df.columns or "Name" not in _funds_df.columns:
+                    raise ValueError("CSV must include Code and Name columns.")
+                _funds_df = _funds_df[["Code", "Name"]].copy()
+            except Exception as _funds_upload_err:
+                st.warning(f"Could not read mutual fund CSV: {_funds_upload_err}")
+                _funds_df = _funds_default_df
+        else:
+            _funds_df = _funds_default_df
+
+        st.download_button(
+            "⬇️ Download fund sample CSV",
+            data=_funds_df.to_csv(index=False).encode("utf-8"),
+            file_name="mutual_fund_watchlist.csv",
+            mime="text/csv",
+            help="Download the current mutual fund watchlist as a CSV for editing and re-uploading later.",
+        )
+
         edited_funds = st.data_editor(
             _funds_df,
             num_rows="dynamic",
